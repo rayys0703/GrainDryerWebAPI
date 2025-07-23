@@ -15,9 +15,11 @@ class DryingProcessController extends Controller
     public function getHistory(Request $request)
     {
         try {
-            $user = Auth::user();
+            // $user = Auth::user();
             $user_id = 1;
-            $processes = DryingProcess::where('user_id', $user_id) //$user->user_id
+            $processes = DryingProcess::where('user_id', $user_id)
+                ->where('process_id', '>=', 1)
+                ->where('status', 'completed')
                 ->with('grainType')
                 ->orderBy('timestamp_mulai', 'desc')
                 ->get()
@@ -43,8 +45,8 @@ class DryingProcessController extends Controller
                             'endDate' => $process->timestamp_selesai ? Carbon::parse($process->timestamp_selesai)->format('d F Y') : 'N/A',
                             'startTime' => Carbon::parse($process->timestamp_mulai)->format('H:i'),
                             'endTime' => $process->timestamp_selesai ? Carbon::parse($process->timestamp_selesai)->format('H:i') : 'N/A',
-                            'initialWeight' => $firstSensor ? $process->berat_gabah : 0.0,
-                            'finalWeight' => $lastSensor ? $lastSensor->berat_gabah ?? $process->berat_gabah : 0.0,
+                            'initialWeight' => $firstSensor ? (float) $process->berat_gabah_awal : 0.0,
+                            'finalWeight' => $lastSensor ? (float) ($lastSensor->berat_gabah ?? $process->berat_gabah_awal) : 0.0,
                             'estimatedDuration' => $this->formatDuration($process->durasi_rekomendasi),
                             'executedDuration' => $this->formatDuration($process->durasi_terlaksana),
                             'totalDuration' => $process->durasi_aktual ? $this->formatDuration($process->durasi_aktual) : 'N/A',
@@ -71,11 +73,11 @@ class DryingProcessController extends Controller
     public function getProcessDetails(Request $request, $processId)
     {
         try {
-            $user = Auth::user();
+            // $user = Auth::user();
             $user_id = 1;
 
             $process = DryingProcess::where('process_id', $processId)
-                ->where('user_id', $user_id) // $user->user_id
+                ->where('user_id', $user_id)
                 ->with('grainType')
                 ->first();
 
@@ -88,28 +90,30 @@ class DryingProcessController extends Controller
 
             $sensorData = SensorData::where('process_id', $processId)
                 ->with('sensorDevice')
-                ->orderBy('timestamp', 'asc')
+                // ->orderBy('timestamp', 'desc') // Urutkan dari terbaru ke terlama
                 ->get()
                 ->groupBy(function ($data) {
-                    return Carbon::parse($data->timestamp)->format('H:i');
-                })->map(function ($group, $time) {
+                    return Carbon::parse($data->timestamp)->toDateTimeString(); // Grup berdasarkan timestamp penuh
+                })->map(function ($group, $time) use (&$intervalCounter) {
+                    static $intervalCounter = 0;
+                    $intervalCounter++;
                     $intervalData = [];
                     foreach ($group as $data) {
-                        $deviceName = $data->sensorDevice->device_name;
+                        $deviceName = $data->sensorDevice->device_name ?? 'Unknown';
                         $intervalData[$deviceName] = [
-                            'burning_temperature' => $data->suhu_pembakaran,
-                            'room_temperature' => $data->suhu_ruangan,
-                            'grain_moisture' => $data->kadar_air_gabah,
-                            'grain_temperature' => $data->suhu_gabah,
-                            'weight' => $data->berat_gabah ?? null,
-                            'stirrer_status' => $data->status_pengaduk,
+                            'burning_temperature' => $data->suhu_pembakaran !== null ? (float) $data->suhu_pembakaran : null,
+                            'room_temperature' => $data->suhu_ruangan !== null ? (float) $data->suhu_ruangan : null,
+                            'grain_moisture' => $data->kadar_air_gabah !== null ? (float) $data->kadar_air_gabah : null,
+                            'grain_temperature' => $data->suhu_gabah !== null ? (float) $data->suhu_gabah : null,
+                            'weight' => $data->berat_gabah !== null ? (float) $data->berat_gabah : null,
+                            'stirrer_status' => $data->status_pengaduk !== null ? (bool) $data->status_pengaduk : null,
                         ];
                     }
                     return [
-                        'interval' => $time,
+                        'interval' => $intervalCounter, // Nomor interval berurutan
                         'data' => $intervalData,
                     ];
-                })->values();
+                })->values()->sortByDesc('interval'); // Urutkan berdasarkan interval secara descending
 
             return response()->json([
                 'success' => true,

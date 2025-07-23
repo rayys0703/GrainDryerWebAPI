@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\GrainTypeController;
 use App\Http\Controllers\Api\TrainingDataController;
 use App\Http\Controllers\Api\RealtimeDataController;
 use App\Http\Controllers\Api\DryingProcessController;
+use App\Http\Controllers\Api\SensorDevicesController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -49,3 +50,5 @@ Route::post('/prediction/receive', [PredictionController::class, 'receivePredict
 // History Drying Process
 Route::get('/drying-history', [DryingProcessController::class, 'getHistory']);
 Route::get('/drying-process/{processId}', [DryingProcessController::class, 'getProcessDetails']);
+
+Route::get('/sensor-devices', [SensorDevicesController::class, 'index']);

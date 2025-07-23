@@ -37,4 +37,9 @@ class DryingProcess extends Model
     {
         return $this->hasMany(SensorData::class, 'process_id', 'process_id');
     }
+
+    public function predictionEstimations()
+    {
+        return $this->hasMany(PredictionEstimation::class, 'process_id', 'process_id');
+    }
 }

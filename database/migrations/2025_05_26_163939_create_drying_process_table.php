@@ -14,16 +14,16 @@ return new class extends Migration
         Schema::create('drying_process', function (Blueprint $table) {
             $table->increments('process_id');
             $table->string('lokasi', 100)->nullable();
-            $table->unsignedInteger('user_id');
-            $table->unsignedInteger('grain_type_id');
-            $table->dateTime('timestamp_mulai')->useCurrent();
+            $table->unsignedInteger('user_id')->nullable();
+            $table->unsignedInteger('grain_type_id')->nullable();
+            $table->dateTime('timestamp_mulai')->nullable();
             $table->dateTime('timestamp_selesai')->nullable();
             $table->float('berat_gabah_awal')->nullable();
             $table->float('berat_gabah_akhir')->nullable();
             $table->float('kadar_air_awal')->nullable();
-            $table->float('kadar_air_target');
+            $table->float('kadar_air_target')->nullable();
             $table->float('kadar_air_akhir')->nullable();
-            $table->integer('durasi_rekomendasi');
+            $table->integer('durasi_rekomendasi')->nullable();
             $table->integer('durasi_aktual')->nullable();
             $table->integer('durasi_terlaksana')->default(0);
             $table->float('avg_estimasi_durasi')->nullable();

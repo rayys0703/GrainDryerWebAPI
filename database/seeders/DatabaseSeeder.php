@@ -26,10 +26,9 @@ class DatabaseSeeder extends Seeder
         $this->call([
             UserSeeder::class,
             SensorDeviceSeeder::class,
-            TrainingDataSeeder::class,
-            // Anda bisa menambahkan seeder lain di sini di masa mendatang
-            // GrainTypeSeeder::class,
-            // SensorDeviceSeeder::class,
+            // TrainingDataSeeder::class,
+            // SyntheticDataSeeder::class,
+            TrainingFileExcelSeeder::class,
         ]);
     }
 }

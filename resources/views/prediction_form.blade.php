@@ -18,6 +18,12 @@
         <div id="error-message" class="alert alert-danger d-none"></div>
         <div id="success-message" class="alert alert-success d-none"></div>
 
+        @if ($activeProcess && !$isProcessComplete)
+            <div class="alert alert-warning">
+                Proses pengeringan sudah dimulai, tetapi belum ada estimasi durasi karena data Jenis Gabah, Bobot Gabah, dan Target Kadar Air belum diinput. Silakan lengkapi data di bawah ini.
+            </div>
+        @endif
+
         <form id="prediction-form" class="mb-4">
             <div class="mb-3">
                 <label for="grain_type_id" class="form-label">Jenis Gabah</label>
@@ -35,19 +41,19 @@
             <div class="mb-3">
                 <label for="berat_gabah_awal" class="form-label">Bobot Gabah (kg)</label>
                 <input type="number" class="form-control" id="berat_gabah_awal" name="berat_gabah_awal"
-                    value="{{ $activeProcess ? $activeProcess->berat_gabah_awal : 2000 }}"
+                    value="{{ $activeProcess && $activeProcess->berat_gabah_awal ? $activeProcess->berat_gabah_awal : 2000 }}"
                     min="100" step="0.1" required>
             </div>
 
             <div class="mb-3">
                 <label for="kadar_air_target" class="form-label">Target Kadar Air (%)</label>
                 <input type="number" class="form-control" id="kadar_air_target" name="kadar_air_target"
-                    value="{{ $activeProcess ? $activeProcess->kadar_air_target : 14 }}"
+                    value="{{ $activeProcess && $activeProcess->kadar_air_target ? $activeProcess->kadar_air_target : 14 }}"
                     min="0" max="100" step="0.1" required>
             </div>
 
             <button type="submit" class="btn btn-primary" id="start-button"
-                {{ $activeProcess ? 'disabled' : '' }}>
+                {{ $activeProcess && $isProcessComplete ? 'disabled' : '' }}>
                 Mulai Prediksi
             </button>
         </form>
@@ -61,17 +67,14 @@
             <div class="card">
                 <div class="card-body">
                     <h5 class="card-title">Status Proses</h5>
-                    <p class="card-text">Prediksi sedang berjaliran: {{ $activeProcess->status }}</p>
+                    <p class="card-text">Status: {{ $activeProcess->status }}</p>
                     <p class="card-text">Process ID: {{ $activeProcess->process_id }}</p>
-                    {{-- <p class="card-text" id="estimated-duration">
-                        Estimasi Durasi: {{ $activeProcess->durasi_rekomendasi ? $activeProcess->durasi_rekomendasi . ' menit (~' . floor($activeProcess->durasi_rekomendasi/60) . ' jam ' . ($activeProcess->durasi_rekomendasi % 60) . ' menit)' : 'Menunggu data sensor...' }}
-                    </p> --}}
                     <p class="card-text" id="estimated-duration">
-                        Estimasi Durasi: 
-                        @if ($latestEstimation && $latestEstimation->estimasi_durasi > 0)
+                        Estimasi Durasi:
+                        @if ($isProcessComplete && $latestEstimation && $latestEstimation->estimasi_durasi > 0)
                             {{ round($latestEstimation->estimasi_durasi) }} menit (~{{ floor($latestEstimation->estimasi_durasi / 60) }} jam {{ $latestEstimation->estimasi_durasi % 60 }} menit)
                         @else
-                            Menunggu data sensor...
+                            Menunggu data lengkap atau prediksi...
                         @endif
                     </p>
                 </div>
@@ -88,7 +91,7 @@
             setTimeout(() => element.classList.add('d-none'), 5000);
         }
 
-        // Validasi form sebelum submit
+        // Validasi dan submit form
         document.getElementById('prediction-form').addEventListener('submit', async (e) => {
             e.preventDefault();
             const startButton = document.getElementById('start-button');
@@ -121,7 +124,6 @@
             try {
                 const response = await axios.post('/api/prediction/start', data);
                 showMessage('success-message', response.data.message, false);
-                // Reload halaman untuk memperbarui status
                 setTimeout(() => window.location.reload(), 1000);
             } catch (error) {
                 const errorMsg = error.response?.data?.error || 'Gagal memulai prediksi!';
@@ -145,22 +147,6 @@
                     showMessage('error-message', errorMsg);
                 }
             });
-
-            // Polling untuk pembaruan status real-time
-        //     async function checkActiveProcess() {
-        //         try {
-        //             const response = await axios.get('/api/prediction/check-active');
-        //             if (response.data.active) {
-        //                 document.getElementById('estimated-duration').textContent =
-        //                     `Estimasi Durasi: ${response.data.estimated_duration ? response.data.estimated_duration + ' menit' : 'Menunggu data sensor...'}`;
-        //             } else {
-        //                 window.location.reload(); // Reload jika tidak ada proses aktif
-        //             }
-        //         } catch (error) {
-        //             console.error('Error checking active process:', error);
-        //         }
-        //     }
-        //     setInterval(checkActiveProcess, 10000); // Polling setiap 10 detik
         @endif
     </script>
 

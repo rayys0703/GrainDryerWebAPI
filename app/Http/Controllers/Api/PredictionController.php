@@ -29,50 +29,33 @@ class PredictionController extends Controller
         }
 
         try {
-            // Hentikan semua proses aktif
-            $activeProcesses = DryingProcess::whereIn('status', ['pending', 'ongoing'])->get();
-            foreach ($activeProcesses as $activeProcess) {
-                $latestSensorData = SensorData::where('process_id', $activeProcess->process_id)
-                    ->latest('timestamp')
-                    ->first();
-
-                $kadar_air_akhir = $latestSensorData ? $latestSensorData->kadar_air_gabah : null;
-                $durasi_terlaksana = $activeProcess->timestamp_mulai
-                    ? round(Carbon::parse($activeProcess->timestamp_mulai)->diffInMinutes(now()))
-                    : 0;
-
-                // Hitung rata-rata estimasi durasi (non-nol)
-                $avg_estimasi_durasi = PredictionEstimation::where('process_id', $activeProcess->process_id)
-                    ->where('estimasi_durasi', '>', 0)
-                    ->avg('estimasi_durasi');
-
-                $activeProcess->update([
-                    'status' => 'completed',
-                    'kadar_air_akhir' => $kadar_air_akhir,
-                    'durasi_terlaksana' => $durasi_terlaksana,
-                    'avg_estimasi_durasi' => $avg_estimasi_durasi
+            // Cari proses pending atau buat baru jika tidak ada
+            $dryingProcess = DryingProcess::where('status', 'pending')->first();
+            if ($dryingProcess) {
+                // Perbarui proses pending
+                $dryingProcess->update([
+                    'grain_type_id' => (int) $request->grain_type_id,
+                    'berat_gabah_awal' => (float) $request->berat_gabah_awal,
+                    'kadar_air_target' => (float) $request->kadar_air_target,
+                    'user_id' => $request->user_id ?? 1,
+                    'status' => 'ongoing',
+                    'timestamp_mulai' => now(),
+                    'durasi_rekomendasi' => 0
                 ]);
-                Log::info('Active process stopped', [
-                    'process_id' => $activeProcess->process_id,
-                    'kadar_air_akhir' => $kadar_air_akhir,
-                    'durasi_terlaksana' => $durasi_terlaksana,
-                    'avg_estimasi_durasi' => $avg_estimasi_durasi
+                Log::info('Pending drying process updated', ['process_id' => $dryingProcess->process_id]);
+            } else {
+                // Buat proses baru
+                $dryingProcess = DryingProcess::create([
+                    'grain_type_id' => (int) $request->grain_type_id,
+                    'berat_gabah_awal' => (float) $request->berat_gabah_awal,
+                    'kadar_air_target' => (float) $request->kadar_air_target,
+                    'user_id' => $request->user_id ?? 1,
+                    'status' => 'ongoing',
+                    'timestamp_mulai' => now(),
+                    'durasi_rekomendasi' => 0
                 ]);
+                Log::info('New drying process created', ['process_id' => $dryingProcess->process_id]);
             }
-
-            // Buat proses pengeringan baru
-            $dryingProcess = DryingProcess::create([
-                'grain_type_id' => (int) $request->grain_type_id,
-                'berat_gabah_awal' => (float) $request->berat_gabah_awal,
-                'berat_gabah_akhir' => (float) $request->berat_gabah_awal,
-                'kadar_air_target' => (float) $request->kadar_air_target,
-                'user_id' => $request->user_id ?? 1,
-                'status' => 'pending',
-                'timestamp_mulai' => now(),
-                'durasi_rekomendasi' => 0
-            ]);
-
-            Log::info('Drying process created', ['process_id' => $dryingProcess->process_id]);
 
             return response()->json([
                 'message' => 'Prediction started successfully, waiting for sensor data...',
@@ -106,7 +89,7 @@ class PredictionController extends Controller
             }
 
             $latestSensorData = SensorData::where('process_id', $dryingProcess->process_id)
-                ->latest('timestamp')
+                ->latest()
                 ->first();
 
             $kadar_air_akhir = $latestSensorData ? $latestSensorData->kadar_air_gabah : null;
@@ -114,7 +97,6 @@ class PredictionController extends Controller
                 ? round(Carbon::parse($dryingProcess->timestamp_mulai)->diffInMinutes(now()))
                 : 0;
 
-            // Hitung rata-rata estimasi durasi (non-nol)
             $avg_estimasi_durasi = PredictionEstimation::where('process_id', $dryingProcess->process_id)
                 ->where('estimasi_durasi', '>', 0)
                 ->avg('estimasi_durasi');
@@ -170,18 +152,18 @@ class PredictionController extends Controller
         }
 
         try {
-            $dryingProcess = DryingProcess::where('process_id', $request->process_id)
-                ->whereIn('status', ['pending', 'ongoing'])
-                ->firstOrFail();
+            $dryingProcess = DryingProcess::where('process_id', $request->process_id)->whereIn('status', ['pending', 'ongoing'])->firstOrFail();
 
-            if ($dryingProcess->status == 'pending') {
-                $dryingProcess->update(['status' => 'ongoing']);
+            // Pastikan data DryingProcess lengkap sebelum menyimpan estimasi_durasi
+            if (is_null($dryingProcess->grain_type_id) || is_null($dryingProcess->berat_gabah_awal) || is_null($dryingProcess->kadar_air_target)) {
+                return response()->json(['message' => 'Incomplete drying process data, prediction not stored'], 200);
             }
 
-            if ($dryingProcess->durasi_rekomendasi == 0) {
-                $dryingProcess->update([
-                    'durasi_rekomendasi' => round($request->predicted_drying_time)
-                ]);
+            if ($dryingProcess->status == 'pending') {$dryingProcess->update(['status' => 'ongoing']);}
+
+            // Perbarui durasi_rekomendasi hanya jika masih NULL
+            if (is_null($dryingProcess->durasi_rekomendasi) || $dryingProcess->durasi_rekomendasi == 0) {
+                $dryingProcess->update(['durasi_rekomendasi' => round($request->predicted_drying_time)]);
             }
 
             // Simpan estimasi durasi
@@ -207,35 +189,12 @@ class PredictionController extends Controller
                 }
             }
 
-            Log::info('Drying process updated', [
-                'process_id' => $dryingProcess->process_id,
-                'durasi_rekomendasi' => $request->predicted_drying_time
-            ]);
+            // Perbarui durasi_terlaksana berdasarkan timestamp_mulai hingga sekarang
+            $durasiTerlaksana = $dryingProcess->timestamp_mulai ? round(Carbon::parse($dryingProcess->timestamp_mulai)->diffInMinutes(now())) : 0;
+            $dryingProcess->update(['durasi_terlaksana' => $durasiTerlaksana]);
 
-            foreach ($request->points as $point) {
-                $device = SensorDevice::where('device_id', $point['point_id'])->first();
-                if (!$device) {
-                    Log::error('Sensor device not found', ['point_id' => $point['point_id']]);
-                    return response()->json(['error' => 'Sensor device not found for point_id: ' . $point['point_id']], 404);
-                }
-
-                SensorData::create([
-                    'process_id' => $dryingProcess->process_id,
-                    'device_id' => $device->device_id,
-                    'timestamp' => date('Y-m-d H:i:s', $request->timestamp),
-                    'kadar_air_gabah' => $point['grain_moisture'],
-                    'suhu_gabah' => $point['grain_temperature'],
-                    'suhu_ruangan' => $point['room_temperature'],
-                    'suhu_pembakaran' => $point['burning_temperature'],
-                    'status_pengaduk' => $point['stirrer_status']
-                ]);
-            }
-
-            Log::info('Sensor data saved', ['process_id' => $dryingProcess->process_id, 'points' => count($request->points)]);
-
-            // Ubah status ke completed hanya jika kadar air target tercapai
+            // Ubah status ke completed jika kadar air target tercapai
             if ($request->avg_grain_moisture <= $dryingProcess->kadar_air_target) {
-                // Hitung rata-rata estimasi durasi (non-nol)
                 $avg_estimasi_durasi = PredictionEstimation::where('process_id', $dryingProcess->process_id)
                     ->where('estimasi_durasi', '>', 0)
                     ->avg('estimasi_durasi');
@@ -243,12 +202,10 @@ class PredictionController extends Controller
                 $dryingProcess->update([
                     'status' => 'completed',
                     'kadar_air_akhir' => $request->avg_grain_moisture,
-                    'durasi_terlaksana' => $dryingProcess->timestamp_mulai
-                        ? round(Carbon::parse($dryingProcess->timestamp_mulai)->diffInMinutes(now()))
-                        : 0,
+                    'durasi_terlaksana' => $durasiTerlaksana,
                     'avg_estimasi_durasi' => $avg_estimasi_durasi
                 ]);
-                Log::info('Drying process completed', [
+                Log::info('Drying process completed - Kadar air mencapai target', [
                     'process_id' => $dryingProcess->process_id,
                     'reason' => 'Kadar air mencapai target',
                     'avg_estimasi_durasi' => $avg_estimasi_durasi

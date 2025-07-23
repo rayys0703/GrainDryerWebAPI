@@ -14,6 +14,7 @@ class SensorDevice extends Model
     protected $fillable = [
         'device_name',
         'address',
+        'status',
         'created_at',
     ];
 

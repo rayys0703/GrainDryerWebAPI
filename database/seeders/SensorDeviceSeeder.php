@@ -13,18 +13,19 @@ class SensorDeviceSeeder extends Seeder
         $sensors = [
             [
                 'device_id' => 1,
-                'device_name' => 'Sensor Tombak 1',
+                'device_name' => 'Tombak 1',
                 'address' => 'iot/sensor/datagabah/1',
+                'status' => true,
                 'created_at' => now(),
                 'updated_at' => now(),
             ],
-            [
-                'device_id' => 2,
-                'device_name' => 'Sensor Pembakaran',
-                'address' => 'iot/sensor/pembakaran/2',
-                'created_at' => now(),
-                'updated_at' => now(),
-            ],
+            // [
+            //     'device_id' => 2,
+            //     'device_name' => 'Sensor Tombak 2',
+            //     'address' => 'iot/sensor/datagabah/2',
+            //     'created_at' => now(),
+            //     'updated_at' => now(),
+            // ],
             // [
             //     'device_id' => 3,
             //     'device_name' => 'Sensor Tombak 3',
@@ -39,6 +40,14 @@ class SensorDeviceSeeder extends Seeder
             //     'created_at' => now(),
             //     'updated_at' => now(),
             // ],
+            [
+                'device_id' => 5,
+                'device_name' => 'Pembakaran & Pengaduk',
+                'address' => 'iot/sensor/pembakaran/5',
+                'status' => true,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
         ];
 
         foreach ($sensors as $sensor) {

@@ -15,6 +15,7 @@ return new class extends Migration
             $table->increments('device_id'); 
             $table->string('device_name', 50)->unique();
             $table->string('address', 100); 
+            $table->boolean('status')->default(false);
             $table->timestamp('created_at')->useCurrent(); 
             $table->timestamp('updated_at')->useCurrent()->useCurrentOnUpdate(); 
         });
