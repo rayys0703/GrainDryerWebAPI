@@ -32,6 +32,11 @@ class BedDryer extends Model
         return $this->belongsTo(User::class, 'user_id', 'user_id');
     }
 
+    public function warehouse()
+    {
+        return $this->belongsTo(Warehouse::class, 'warehouse_id', 'warehouse_id');
+    }
+
     /** Semua device pada dryer ini */
     public function devices()
     {

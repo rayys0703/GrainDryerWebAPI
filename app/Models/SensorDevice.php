@@ -22,6 +22,7 @@ class SensorDevice extends Model
         'device_id',
         'device_name',
         'address',
+        'location',
         'status',
         'created_at',
     ];

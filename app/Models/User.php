@@ -36,6 +36,11 @@ class User extends Authenticatable
         ];
     }
 
+    public function warehouses()
+    {
+        return $this->hasMany(Warehouse::class, 'user_id', 'user_id');
+    }
+
     /** Semua dryer milik user */
     public function bedDryers()
     {

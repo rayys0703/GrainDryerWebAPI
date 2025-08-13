@@ -14,8 +14,8 @@ class AuthController extends Controller
     public function login(Request $request)
     {
         $data = $request->validate([
-            'email'    => ['required', 'email'],
-            'password' => ['required', 'string'],
+            'email'       => ['required', 'email'],
+            'password'    => ['required', 'string'],
             'device_name' => ['nullable', 'string'],
         ]);
 
@@ -53,14 +53,23 @@ class AuthController extends Controller
 
     /**
      * Kembalikan daftar bed dryer milik user yang sedang login.
+     * Kolom 'lokasi' diambil dari warehouses.nama (relasi bed_dryers.warehouse_id).
      */
     public function myBedDryers(Request $request)
     {
         $user = $request->user();
 
-        $dryers = BedDryer::where('user_id', $user->user_id)
-            ->orderBy('nama')
-            ->get(['dryer_id', 'nama', 'lokasi', 'deskripsi']);
+        $dryers = BedDryer::query()
+            ->leftJoin('warehouses', 'warehouses.warehouse_id', '=', 'bed_dryers.warehouse_id')
+            ->where('bed_dryers.user_id', $user->user_id)
+            ->orderBy('bed_dryers.nama')
+            ->get([
+                'bed_dryers.dryer_id',
+                'bed_dryers.nama',
+                // ambil nama gudang sebagai 'lokasi'
+                \DB::raw('COALESCE(warehouses.nama, bed_dryers.lokasi) as lokasi'),
+                'bed_dryers.deskripsi',
+            ]);
 
         return response()->json($dryers);
     }
