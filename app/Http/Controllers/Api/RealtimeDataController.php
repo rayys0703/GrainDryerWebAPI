@@ -242,7 +242,7 @@ class RealtimeDataController extends Controller
                     $finish = Carbon::parse($dryingProcess->timestamp_mulai)->addMinutes($dryingProcess->durasi_rekomendasi);
                     $response['estimated_finish'] = $finish->isSameDay(Carbon::now())
                         ? $finish->format('H:i')
-                        : $finish->format('H:i d F Y');
+                        : $finish->format('H:i d F');
                 }
 
                 // Ambil 5 titik terakhir (per timestamp) untuk grafik
@@ -266,7 +266,7 @@ class RealtimeDataController extends Controller
 
                 foreach ($sensorRows as $group) {
                     $ts = $group->first()->created_at;
-                    $label = date('H:i:s', strtotime($ts));
+                    $label = date('i:s', strtotime($ts));
 
                     $mSum = $mCnt = $gSum = $gCnt = $rSum = $rCnt = $bSum = $bCnt = 0;
 

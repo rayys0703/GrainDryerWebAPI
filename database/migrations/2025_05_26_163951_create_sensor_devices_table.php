@@ -16,6 +16,7 @@ return new class extends Migration
             $table->unsignedInteger('dryer_id'); // milik dryer tertentu
             $table->string('device_name', 50);
             $table->string('address', 100);
+            $table->string('location', 150);
             $table->boolean('status')->default(false);
             $table->timestamp('created_at')->useCurrent();
             $table->timestamp('updated_at')->useCurrent()->useCurrentOnUpdate();
@@ -25,6 +26,7 @@ return new class extends Migration
             // Unik per-bed dryer
             $table->unique(['dryer_id', 'device_name']);
             $table->unique(['dryer_id', 'address']);
+            $table->unique(['dryer_id', 'location']);
         });
     }
 

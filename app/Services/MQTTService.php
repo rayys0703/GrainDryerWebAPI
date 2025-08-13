@@ -12,65 +12,199 @@ use PhpMqtt\Client\Exceptions\MqttClientException;
 
 class MQTTService
 {
+    /** @var MqttClient */
     protected $client;
-    protected $topics = [];         // device_id => {device_id, address, dryer_id}
-    protected $sensorDataBuffer = [];
+
+    /** @var array<int, array> dryer_id => [ [device_id, address, dryer_id], ... ] */
+    protected $devicesByDryer = [];
+
+    /** @var array<string, array> topic => [device_id, address, dryer_id] */
+    protected $topicMap = [];
+
+    /** @var array<int, array<int, array>> buffers per dryer: buffers[dryer_id][device_id] = data array */
+    protected $buffers = [];
+
+    /** @var array<string, bool> daftar topic yang saat ini disubscribe */
+    protected $currentSubscriptions = [];
+
+    /** @var int detik antara refresh daftar device */
+    protected $refreshInterval = 15;
+
+    /** @var int timestamp terakhir refresh */
+    protected $lastRefreshAt = 0;
+
+    /** @var int window maksimal umur data buffer (detik) untuk dianggap satu batch */
+    protected $bufferWindowSeconds = 60;
 
     public function __construct()
     {
-        $this->topics = SensorDevice::where('status', true)
-            ->select('device_id', 'address', 'dryer_id')
-            ->get()
-            ->keyBy('device_id');
-
-        if ($this->topics->isEmpty()) {
-            Log::warning('No active sensor devices found in database');
-        }
-
-        $this->client = new MqttClient('127.0.0.1', 4321, 'laravel-client-' . uniqid());
+        $this->client = new MqttClient('127.0.0.1', 4321, 'laravel-client-' . uniqid('', true));
         $this->client->connect();
+
+        // initial load + subscribe
+        $this->reloadDevicesAndSyncSubscriptions(true);
     }
 
+    /**
+     * Loop MQTT + refresh device secara periodik.
+     */
     public function subscribe()
     {
         try {
-            foreach ($this->topics as $device) {
-                $this->client->subscribe($device->address, function ($topic, $message) {
-                    $this->handleMessage($topic, $message);
-                }, 0);
+            Log::info('MQTT loop started');
+
+            while (true) {
+                // Proses pesan yang masuk (non-blocking loop sekali)
+                $this->client->loop(false);
+
+                // Periodik: refresh daftar device dan sync subscription
+                $this->maybeRefreshDevices();
+
+                // kecilkan CPU usage
+                usleep(200000); // 0.2s
             }
-            Log::info('Subscribed to MQTT topics: ' . implode(', ', $this->topics->pluck('address')->toArray()));
-            $this->client->loop(true);
         } catch (MqttClientException $e) {
-            Log::error('Failed to subscribe to MQTT topics: ' . $e->getMessage());
+            Log::error('Failed in MQTT loop: ' . $e->getMessage());
+        } catch (\Throwable $e) {
+            Log::error('Unexpected error in MQTT loop: ' . $e->getMessage());
         }
     }
 
-    protected function handleMessage($topic, $message)
+    /**
+     * Cek apakah perlu refresh device.
+     */
+    protected function maybeRefreshDevices(): void
+    {
+        $now = time();
+        if ($now - $this->lastRefreshAt >= $this->refreshInterval) {
+            $this->reloadDevicesAndSyncSubscriptions();
+        }
+    }
+
+    /**
+     * Muat ulang device dari DB, kelompokkan per dryer, dan sinkronkan subscribe/unsubscribe topik.
+     */
+    protected function reloadDevicesAndSyncSubscriptions(bool $initial = false): void
+    {
+        $this->lastRefreshAt = time();
+
+        // Ambil device aktif
+        $devices = SensorDevice::where('status', true)
+            ->select('device_id', 'address', 'dryer_id')
+            ->get();
+
+        // Build struktur baru
+        $newTopicMap = [];
+        $newDevicesByDryer = [];
+        foreach ($devices as $d) {
+            if (empty($d->address) || empty($d->dryer_id)) {
+                continue;
+            }
+            $newTopicMap[$d->address] = [
+                'device_id' => (int) $d->device_id,
+                'address'   => (string) $d->address,
+                'dryer_id'  => (int) $d->dryer_id,
+            ];
+            $newDevicesByDryer[$d->dryer_id] ??= [];
+            $newDevicesByDryer[$d->dryer_id][$d->device_id] = [
+                'device_id' => (int) $d->device_id,
+                'address'   => (string) $d->address,
+                'dryer_id'  => (int) $d->dryer_id,
+            ];
+        }
+
+        // Hitung perbedaan subscription
+        $oldTopics = array_keys($this->currentSubscriptions);
+        $newTopics = array_keys($newTopicMap);
+        $toSubscribe   = array_diff($newTopics, $oldTopics);
+        $toUnsubscribe = array_diff($oldTopics, $newTopics);
+
+        // Unsubscribe topik yang hilang
+        foreach ($toUnsubscribe as $topic) {
+            try {
+                $this->client->unsubscribe($topic);
+                unset($this->currentSubscriptions[$topic]);
+                Log::info("Unsubscribed from topic: {$topic}");
+            } catch (\Throwable $e) {
+                Log::warning("Failed to unsubscribe topic {$topic}: " . $e->getMessage());
+            }
+
+            // Bersihkan buffer device terkait (jika ada)
+            if (isset($this->topicMap[$topic])) {
+                $dryerId  = $this->topicMap[$topic]['dryer_id'];
+                $deviceId = $this->topicMap[$topic]['device_id'];
+                unset($this->buffers[$dryerId][$deviceId]);
+                if (empty($this->buffers[$dryerId])) {
+                    unset($this->buffers[$dryerId]);
+                }
+            }
+        }
+
+        // Subscribe topik baru
+        foreach ($toSubscribe as $topic) {
+            try {
+                $this->client->subscribe($topic, function ($incomingTopic, $message) {
+                    $this->handleMessage($incomingTopic, $message);
+                }, 0);
+                $this->currentSubscriptions[$topic] = true;
+                Log::info("Subscribed to topic: {$topic}");
+            } catch (\Throwable $e) {
+                Log::error("Failed to subscribe topic {$topic}: " . $e->getMessage());
+            }
+        }
+
+        // Update peta dan grup setelah sync
+        $this->topicMap = $newTopicMap;
+        $this->devicesByDryer = $newDevicesByDryer;
+
+        if ($initial) {
+            Log::info('Initial MQTT subscriptions synced: ' . implode(', ', array_keys($this->currentSubscriptions)));
+        } else {
+            Log::info('Refreshed MQTT subscriptions. Now subscribed: ' . implode(', ', array_keys($this->currentSubscriptions)));
+        }
+    }
+
+    /**
+     * Terima pesan dari topik.
+     */
+    protected function handleMessage(string $topic, string $message): void
     {
         Log::info('Received MQTT message', ['topic' => $topic, 'message' => $message]);
+
         try {
+            // Identifikasi device & dryer dari topik
+            $meta = $this->topicMap[$topic] ?? null;
+            if (!$meta) {
+                Log::warning('Message on unknown topic (not in subscription map)', ['topic' => $topic]);
+                return;
+            }
+
+            $deviceId = (int) $meta['device_id'];
+            $dryerId  = (int) $meta['dryer_id'];
+
+            // Parse payload
             $data = json_decode($message, true);
-            if (!$data || !isset($data['panel_id'])) {
-                Log::error('Invalid MQTT message format', ['topic' => $topic, 'message' => $message]);
+            if (!is_array($data)) {
+                Log::error('Invalid JSON payload', ['topic' => $topic, 'message' => $message]);
                 return;
             }
 
-            $panel_id = (int) $data['panel_id'];
-            $device   = $this->topics->get($panel_id);
-            if (!$device || $device->address !== $topic) {
-                Log::error('Invalid panel_id or topic mismatch', ['panel_id' => $panel_id, 'topic' => $topic]);
-                return;
+            // (Opsional) fallback panel_id; tapi kita pakai topik sebagai sumber kebenaran
+            if (isset($data['panel_id']) && (int)$data['panel_id'] !== $deviceId) {
+                Log::warning('panel_id mismatch with topic mapping', [
+                    'topic_device_id' => $deviceId,
+                    'payload_panel_id' => (int)$data['panel_id'],
+                ]);
             }
 
-            // Proses per dryer
-            $dryingProcess = DryingProcess::where('dryer_id', $device->dryer_id)
+            // Cari / buat proses untuk dryer ini
+            $dryingProcess = DryingProcess::where('dryer_id', $dryerId)
                 ->whereIn('status', ['pending', 'ongoing'])
                 ->first();
 
             if (!$dryingProcess) {
                 $dryingProcess = DryingProcess::create([
-                    'dryer_id'           => $device->dryer_id,
+                    'dryer_id'           => $dryerId,
                     'status'             => 'pending',
                     'timestamp_mulai'    => null,
                     'grain_type_id'      => null,
@@ -80,78 +214,142 @@ class MQTTService
                 ]);
             }
 
-            $this->sensorDataBuffer[$panel_id] = [
-                'process_id'       => $dryingProcess->process_id,
-                'device_id'        => $panel_id,
-                'timestamp'        => now(),
-                'kadar_air_gabah'  => isset($data['grain_moisture']) ? (float) $data['grain_moisture'] : null,
-                'suhu_gabah'       => isset($data['grain_temperature']) ? (float) $data['grain_temperature'] : null,
-                'suhu_ruangan'     => isset($data['room_temperature']) ? (float) $data['room_temperature'] : null,
-                'suhu_pembakaran'  => isset($data['burning_temperature']) ? (float) $data['burning_temperature'] : null,
-                'status_pengaduk'  => isset($data['stirrer_status']) ? (bool) $data['stirrer_status'] : null,
+            // Simpan ke DB (raw) per event supaya historis tetap ada
+            $row = [
+                'process_id'      => $dryingProcess->process_id,
+                'device_id'       => $deviceId,
+                'timestamp'       => now(),
+                'kadar_air_gabah' => isset($data['grain_moisture'])     ? (float) $data['grain_moisture']     : null,
+                'suhu_gabah'      => isset($data['grain_temperature'])  ? (float) $data['grain_temperature']  : null,
+                'suhu_ruangan'    => isset($data['room_temperature'])   ? (float) $data['room_temperature']   : null,
+                'suhu_pembakaran' => isset($data['burning_temperature'])? (float) $data['burning_temperature']: null,
+                'status_pengaduk' => array_key_exists('stirrer_status', $data) ? (bool) $data['stirrer_status'] : null,
             ];
+            SensorData::create($row);
 
-            if (count($this->sensorDataBuffer) === $this->topics->count()) {
-                $this->processAndSendData($dryingProcess);
+            // Taruh juga ke buffer per-dryer (untuk penghitungan batch)
+            $this->buffers[$dryerId][$deviceId] = $row;
+
+            // Jika semua device aktif untuk dryer ini sudah mengirim batch dalam window, proses batch
+            $expectedDevices = isset($this->devicesByDryer[$dryerId]) ? array_keys($this->devicesByDryer[$dryerId]) : [];
+            $gotDevices      = isset($this->buffers[$dryerId]) ? array_keys($this->buffers[$dryerId]) : [];
+
+            if (!empty($expectedDevices) && $this->hasAllDevices($expectedDevices, $gotDevices)) {
+                // Cek umur buffer: semua timestamp harus dalam window
+                if ($this->isBufferFresh($this->buffers[$dryerId])) {
+                    $this->processAndSendData($dryingProcess, $dryerId);
+                } else {
+                    // buffer terlalu tua → reset
+                    $this->buffers[$dryerId] = [];
+                }
             }
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             Log::error('Error processing MQTT message: ' . $e->getMessage());
         }
     }
 
-    protected function processAndSendData($dryingProcess)
+    /**
+     * Pastikan semua device yang diharapkan sudah ada di buffer dryer.
+     */
+    protected function hasAllDevices(array $expectedDeviceIds, array $gotDeviceIds): bool
+    {
+        sort($expectedDeviceIds);
+        sort($gotDeviceIds);
+        return $expectedDeviceIds === $gotDeviceIds;
+    }
+
+    /**
+     * Cek apakah seluruh data buffer dryer masih dalam window waktu yang diizinkan.
+     *
+     * @param array<int, array> $bufferForDryer [device_id => row]
+     */
+    protected function isBufferFresh(array $bufferForDryer): bool
+    {
+        if (empty($bufferForDryer)) return false;
+        $now = time();
+        $minTs = PHP_INT_MAX;
+        foreach ($bufferForDryer as $row) {
+            $ts = isset($row['timestamp']) ? strtotime($row['timestamp']) : $now;
+            if ($ts < $minTs) $minTs = $ts;
+        }
+        return ($now - $minTs) <= $this->bufferWindowSeconds;
+    }
+
+    /**
+     * Proses satu batch untuk dryer tertentu, lalu kirim ke service prediksi.
+     */
+    protected function processAndSendData(DryingProcess $dryingProcess, int $dryerId): void
     {
         try {
-            foreach ($this->sensorDataBuffer as $data) {
-                SensorData::create($data);
-            }
-            Log::info('Sensor data saved', ['process_id' => $dryingProcess->process_id, 'records' => count($this->sensorDataBuffer)]);
-
-            if (is_null($dryingProcess->grain_type_id) || is_null($dryingProcess->berat_gabah_awal) || is_null($dryingProcess->kadar_air_target)) {
-                $this->sensorDataBuffer = [];
+            $buffer = $this->buffers[$dryerId] ?? [];
+            if (empty($buffer)) {
                 return;
             }
 
-            $buffer_age = time() - min(array_map(fn($d) => $d['timestamp']->timestamp, $this->sensorDataBuffer));
-            if ($buffer_age > 60) {
-                $this->sensorDataBuffer = [];
+            // Pastikan proses punya field minimum agar prediksi valid.
+            if (is_null($dryingProcess->grain_type_id)
+                || is_null($dryingProcess->berat_gabah_awal)
+                || is_null($dryingProcess->kadar_air_target)) {
+                // belum siap prediksi → hanya reset buffer dryer
+                $this->buffers[$dryerId] = [];
                 return;
             }
 
-            $suhu_gabah_values      = array_filter(array_column($this->sensorDataBuffer, 'suhu_gabah'), fn($v) => !is_null($v));
-            $kadar_air_gabah_values = array_filter(array_column($this->sensorDataBuffer, 'kadar_air_gabah'), fn($v) => !is_null($v));
-            $suhu_ruangan_values    = array_filter(array_column($this->sensorDataBuffer, 'suhu_ruangan'), fn($v) => !is_null($v));
-            $suhu_pembakaran_values = array_filter(array_column($this->sensorDataBuffer, 'suhu_pembakaran'), fn($v) => !is_null($v));
-            $status_pengaduk_values = array_filter(array_column($this->sensorDataBuffer, 'status_pengaduk'), fn($v) => !is_null($v));
+            // Kumpulkan nilai rata2 dari buffer per device dalam batch ini
+            $suhu_gabah_values = [];
+            $kadar_air_values  = [];
+            $suhu_ruang_values = [];
+            $suhu_bakar_values = [];
+            $stirrer_values    = [];
 
-            if (empty($suhu_gabah_values) || empty($kadar_air_gabah_values) || empty($suhu_ruangan_values) || empty($suhu_pembakaran_values) || empty($status_pengaduk_values)) {
-                $this->sensorDataBuffer = [];
+            foreach ($buffer as $row) {
+                if (!is_null($row['suhu_gabah']))      $suhu_gabah_values[] = (float) $row['suhu_gabah'];
+                if (!is_null($row['kadar_air_gabah'])) $kadar_air_values[]  = (float) $row['kadar_air_gabah'];
+                if (!is_null($row['suhu_ruangan']))    $suhu_ruang_values[] = (float) $row['suhu_ruangan'];
+                if (!is_null($row['suhu_pembakaran'])) $suhu_bakar_values[] = (float) $row['suhu_pembakaran'];
+                if (!is_null($row['status_pengaduk'])) $stirrer_values[]    = (bool)  $row['status_pengaduk'];
+            }
+
+            if (empty($suhu_gabah_values) || empty($kadar_air_values) || empty($suhu_ruang_values) || empty($suhu_bakar_values) || empty($stirrer_values)) {
+                $this->buffers[$dryerId] = [];
                 return;
             }
 
             $payload = [
-                'process_id'        => $dryingProcess->process_id,
-                'grain_type_id'     => $dryingProcess->grain_type_id,
-                'suhu_gabah'        => number_format(array_sum($suhu_gabah_values) / count($suhu_gabah_values), 7, '.', ''),
-                'kadar_air_gabah'   => number_format(array_sum($kadar_air_gabah_values) / count($kadar_air_gabah_values), 7, '.', ''),
-                'suhu_ruangan'      => number_format(array_sum($suhu_ruangan_values) / count($suhu_ruangan_values), 7, '.', ''),
-                'suhu_pembakaran'   => number_format(array_sum($suhu_pembakaran_values) / count($suhu_pembakaran_values), 7, '.', ''),
-                'status_pengaduk'   => (bool) reset($status_pengaduk_values),
-                'kadar_air_target'  => (float) $dryingProcess->kadar_air_target,
-                'weight'            => (float) $dryingProcess->berat_gabah_awal,
-                'timestamp'         => time(),
+                'process_id'       => $dryingProcess->process_id,
+                'grain_type_id'    => $dryingProcess->grain_type_id,
+                'suhu_gabah'       => number_format(array_sum($suhu_gabah_values) / count($suhu_gabah_values), 7, '.', ''),
+                'kadar_air_gabah'  => number_format(array_sum($kadar_air_values)  / count($kadar_air_values),  7, '.', ''),
+                'suhu_ruangan'     => number_format(array_sum($suhu_ruang_values) / count($suhu_ruang_values), 7, '.', ''),
+                'suhu_pembakaran'  => number_format(array_sum($suhu_bakar_values) / count($suhu_bakar_values), 7, '.', ''),
+                'status_pengaduk'  => (bool) reset($stirrer_values),
+                'kadar_air_target' => (float) $dryingProcess->kadar_air_target,
+                'weight'           => (float) $dryingProcess->berat_gabah_awal,
+                'timestamp'        => time(),
             ];
 
-            $response = Http::timeout(10)->post(env('ML_API') . '/predict-now', $payload);
-            if (!$response->successful()) {
-                Log::error('Failed to send data to prediction service', [
-                    'status' => $response->status(), 'body' => $response->body()
-                ]);
+            if (env('ML_API')) {
+                $response = Http::timeout(10)->post(rtrim(env('ML_API'), '/') . '/predict-now', $payload);
+                if (!$response->successful()) {
+                    Log::error('Failed to send data to prediction service', [
+                        'status' => $response->status(), 'body' => $response->body()
+                    ]);
+                }
+            } else {
+                Log::warning('ML_API env is not set; skipping prediction POST.');
             }
 
-            $this->sensorDataBuffer = [];
-        } catch (\Exception $e) {
+            // Reset buffer untuk dryer ini saja (dryer lain tidak terganggu)
+            $this->buffers[$dryerId] = [];
+
+            Log::info('Batch processed & sent', [
+                'dryer_id'   => $dryerId,
+                'process_id' => $dryingProcess->process_id,
+            ]);
+        } catch (\Throwable $e) {
             Log::error('Error processing and sending data: ' . $e->getMessage());
+            // Jika error, jangan biarkan buffer membusuk: reset saja dryer ini
+            $this->buffers[$dryerId] = [];
         }
     }
 

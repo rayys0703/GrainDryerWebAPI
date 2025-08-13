@@ -23,6 +23,10 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Bed Dryers
     Route::get('/bed-dryers', [AuthController::class, 'myBedDryers']);
+
+    Route::get('/drying-history', [DryingProcessController::class, 'getHistory']);
+    Route::get('/drying-process/{processId}', [DryingProcessController::class, 'getProcessDetails']);
+    Route::post('/drying-process/validate', [DryingProcessController::class, 'validateProcess']);
 });
 
 Route::get('/grain-types', [GrainTypeController::class, 'index']);
@@ -35,8 +39,5 @@ Route::get('/dashboard-data', [RealtimeDataController::class, 'dashboardData']);
 Route::post('/prediction/start', [PredictionController::class, 'startPrediction']);
 Route::post('/prediction/stop', [PredictionController::class, 'stopPrediction']);
 Route::post('/prediction/receive', [PredictionController::class, 'receivePrediction']);
-
-Route::get('/drying-history', [DryingProcessController::class, 'getHistory']);
-Route::get('/drying-process/{processId}', [DryingProcessController::class, 'getProcessDetails']);
 
 Route::get('/sensor-devices', [SensorDevicesController::class, 'index']);

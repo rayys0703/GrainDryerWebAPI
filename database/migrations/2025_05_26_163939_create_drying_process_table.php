@@ -27,7 +27,6 @@ return new class extends Migration
             $table->float('kadar_air_akhir')->nullable();
 
             $table->integer('durasi_rekomendasi')->nullable();
-            $table->integer('durasi_aktual')->nullable();
             $table->integer('durasi_terlaksana')->default(0);
             $table->float('avg_estimasi_durasi')->nullable();
 

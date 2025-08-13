@@ -53,24 +53,39 @@ class AuthController extends Controller
 
     /**
      * Kembalikan daftar bed dryer milik user yang sedang login.
-     * Kolom 'lokasi' diambil dari warehouses.nama (relasi bed_dryers.warehouse_id).
+     * Lokasi diambil dari warehouses.nama dan tampilkan juga sensor devices.
      */
     public function myBedDryers(Request $request)
     {
         $user = $request->user();
 
-        $dryers = BedDryer::query()
-            ->leftJoin('warehouses', 'warehouses.warehouse_id', '=', 'bed_dryers.warehouse_id')
-            ->where('bed_dryers.user_id', $user->user_id)
-            ->orderBy('bed_dryers.nama')
-            ->get([
-                'bed_dryers.dryer_id',
-                'bed_dryers.nama',
-                // ambil nama gudang sebagai 'lokasi'
-                \DB::raw('COALESCE(warehouses.nama, bed_dryers.lokasi) as lokasi'),
-                'bed_dryers.deskripsi',
-            ]);
+        $dryers = BedDryer::with([
+                'warehouse:warehouse_id,nama',
+                'devices:device_id,dryer_id,device_name,address,location,status'
+            ])
+            ->where('user_id', $user->user_id)
+            ->orderBy('nama')
+            ->get();
 
-        return response()->json($dryers);
+        $payload = $dryers->map(function ($d) {
+            return [
+                'dryer_id'        => $d->dryer_id,
+                'nama'            => $d->nama,
+                // lokasi dari warehouses.nama
+                'lokasi'          => optional($d->warehouse)->nama,
+                'deskripsi'       => $d->deskripsi,
+                'sensor_devices'  => $d->devices->map(function ($dev) {
+                    return [
+                        'device_id'   => $dev->device_id,
+                        'device_name' => $dev->device_name,
+                        'address'     => $dev->address,
+                        'location'     => $dev->location,
+                        'status'      => (bool) $dev->status,
+                    ];
+                })->values(),
+            ];
+        })->values();
+
+        return response()->json($payload);
     }
 }
