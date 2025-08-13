@@ -77,10 +77,10 @@
             @csrf
 
             <div>
-                <label for="username" class="block text-sm font-medium text-gray-700">Username</label>
-                <input type="text" id="username" name="username" value="{{ old('username') }}" required autofocus
-                       class="mt-1 block w-full fluent-input @error('username') border-red-500 @enderror">
-                @error('username')
+                <label for="email" class="block text-sm font-medium text-gray-700">Email</label>
+                <input type="text" id="email" name="email" value="{{ old('email') }}" required autofocus
+                       class="mt-1 block w-full fluent-input @error('email') border-red-500 @enderror">
+                @error('email')
                     <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
                 @enderror
             </div>

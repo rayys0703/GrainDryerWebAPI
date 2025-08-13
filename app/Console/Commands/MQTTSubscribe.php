@@ -7,7 +7,7 @@ use App\Services\MQTTService;
 
 class MQTTSubscribe extends Command
 {
-    protected $signature = 'mqtt:subscribe';
+    protected $signature = 'mqtt';
     protected $description = 'Subscribe to MQTT topics for sensor data';
 
     public function handle()

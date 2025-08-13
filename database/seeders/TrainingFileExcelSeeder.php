@@ -2,20 +2,17 @@
 
 namespace Database\Seeders;
 
-use App\Models\DryingProcess;
-use App\Models\SensorData;
-use App\Models\PredictionEstimation;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Carbon;
 use PhpOffice\PhpSpreadsheet\IOFactory;
+use Illuminate\Support\Carbon;
+use App\Models\GrainType;
 
 class TrainingFileExcelSeeder extends Seeder
 {
     public function run(): void
     {
-        // Define the directory for Excel files
         $importDir = storage_path('app/import');
         $files = glob("{$importDir}/*.xlsx");
 
@@ -25,66 +22,37 @@ class TrainingFileExcelSeeder extends Seeder
             return;
         }
 
-        // Devices configuration
-        $devices = [
-            1 => ['device_name' => 'Tombak 1', 'address' => 'iot/sensor/datagabah/1']
-            // 5 => ['device_name' => 'Pembakaran', 'address' => 'iot/sensor/pembakaran/5'],
-        ];
-
-        // Parameters
-        $user_id = 1;
-        $kadar_air_target = 14.0;
-        $grain_type_id = 1;
+        $grainType = GrainType::where('nama_jenis', 'Ciherang')->first() ?? GrainType::first();
+        if (!$grainType) {
+            throw new \RuntimeException('Grain type tidak ditemukan. Seed grain_types terlebih dahulu.');
+        }
+        $grain_type_id = $grainType->grain_type_id;
 
         foreach ($files as $file) {
             try {
                 echo "Processing file: {$file}\n";
                 Log::info("Processing file: {$file}");
 
-                // Load Excel file using PhpSpreadsheet
-                $spreadsheet = IOFactory::load($file);
-                $sheet = $spreadsheet->getActiveSheet();
-                $rows = $sheet->toArray();
+                $sheet = IOFactory::load($file)->getActiveSheet();
+                $rows  = $sheet->toArray();
 
-                // Validate that sheet has data
                 if (empty($rows)) {
                     Log::warning("File {$file} is empty or could not be read.");
-                    echo "File {$file} is empty or could not be read.\n";
                     continue;
                 }
 
-                // Get and remove header
-                $header = array_shift($rows);
+                // Buang header
+                array_shift($rows);
 
-                // Validate header (expected columns)
-                $expectedColumns = [
-                    0 => 'interval_seconds',
-                    1 => 'estimasi_minutes',
-                    2 => 'grain_moisture',
-                    3 => 'grain_temperature',
-                    4 => 'room_temperature',
-                    5 => 'burn_temperature',
-                    6 => 'weight',
-                ];
-
-                if (count($header) < count($expectedColumns)) {
-                    Log::warning("File {$file} has fewer columns than expected.");
-                    echo "File {$file} has fewer columns than expected.\n";
-                    continue;
-                }
-
-                // Map rows to data
+                // Mapping (paksa interval 5 detik)
+                // Kolom: 0:interval(ignored), 1:Estimasi(Menit), 2:MC, 3:T_gabah, 4:T_room, 5:T_burn, 6:weight
                 $mapped = [];
                 foreach ($rows as $rowIndex => $row) {
-                    // Ensure row has enough columns
-                    if (count($row) < count($expectedColumns)) {
-                        Log::warning("Row " . ($rowIndex + 2) . " in {$file} has missing columns.");
-                        continue;
-                    }
+                    if (count(array_filter($row, fn($v) => $v !== null && $v !== '')) === 0) continue;
 
                     $mapped[] = [
-                        'interval_seconds'   => isset($row[0]) ? (float) $row[0] : null,
-                        'estimasi_minutes'   => isset($row[1]) ? (float) $row[1] : null,
+                        'interval_seconds'   => $rowIndex * 5,
+                        'estimasi_minutes'   => isset($row[1]) && $row[1] !== '' ? (float) $row[1] : null,
                         'grain_moisture'     => isset($row[2]) ? (float) $row[2] : null,
                         'grain_temperature'  => isset($row[3]) ? (float) $row[3] : null,
                         'room_temperature'   => isset($row[4]) ? (float) $row[4] : null,
@@ -93,112 +61,93 @@ class TrainingFileExcelSeeder extends Seeder
                     ];
                 }
 
-                // Skip if no valid data
-                if (empty($mapped)) {
-                    Log::warning("No valid data extracted from {$file}.");
-                    echo "No valid data extracted from {$file}.\n";
-                    continue;
-                }
-
-                // Calculate initial and final values
-                $valid_data = array_filter($mapped, function ($item) {
-                    return !is_null($item['interval_seconds']) && !is_null($item['grain_moisture']) && !is_null($item['grain_temperature']);
-                });
-
-                if (empty($valid_data)) {
+                // Minimal valid: moisture & suhu gabah ada
+                $valid = array_values(array_filter($mapped, fn($r) =>
+                    $r['grain_moisture'] !== null && $r['grain_temperature'] !== null
+                ));
+                if (empty($valid)) {
                     Log::warning("No valid data with required fields in {$file}.");
-                    echo "No valid data with required fields in {$file}.\n";
                     continue;
                 }
 
-                // Sort by interval to get initial and final values
-                usort($valid_data, function ($a, $b) {
-                    return $a['interval_seconds'] <=> $b['interval_seconds'];
-                });
+                usort($valid, fn($a, $b) => $a['interval_seconds'] <=> $b['interval_seconds']);
 
-                $initial_data = reset($valid_data);
-                $final_data = end($valid_data);
-                $total_duration_minutes = ceil($final_data['interval_seconds'] / 60);
+                $first = $valid[0];
+                $last  = $valid[count($valid) - 1];
 
-                // Calculate avg_estimasi_durasi from estimasi_minutes (non-zero)
-                $estimasi_minutes = array_filter(array_column($mapped, 'estimasi_minutes'), function ($value) {
-                    return !is_null($value) && $value > 0;
-                });
-                $avg_estimasi_durasi = !empty($estimasi_minutes) ? array_sum($estimasi_minutes) / count($estimasi_minutes) : $total_duration_minutes;
-                $avg_estimasi_durasi = (int) round($avg_estimasi_durasi, 0);
+                // Estimasi akhir (ambil dari baris valid terakhir yang punya estimasi_minutes)
+                $durasiAkhirMenit = null;
+                for ($i = count($valid) - 1; $i >= 0; $i--) {
+                    if ($valid[$i]['estimasi_minutes'] !== null) {
+                        $durasiAkhirMenit = $this->dec7($valid[$i]['estimasi_minutes']);
+                        break;
+                    }
+                }
 
-                // Process within a transaction
-                DB::transaction(function () use ($file, $mapped, $user_id, $kadar_air_target, $grain_type_id, $devices, $initial_data, $final_data, $total_duration_minutes, $avg_estimasi_durasi) {
-                    // Create DryingProcess
-                    $process = DryingProcess::create([
-                        'user_id' => $user_id,
-                        'grain_type_id' => $grain_type_id,
-                        'berat_gabah_awal' => $initial_data['weight'],
-                        'berat_gabah_akhir' => $final_data['weight'],
-                        'kadar_air_target' => $kadar_air_target,
-                        'kadar_air_awal' => $initial_data['grain_moisture'],
-                        'kadar_air_akhir' => $final_data['grain_moisture'],
-                        'status' => 'completed',
-                        'durasi_rekomendasi' => $total_duration_minutes,
-                        'durasi_aktual' => $total_duration_minutes,
-                        'durasi_terlaksana' => $total_duration_minutes,
-                        'avg_estimasi_durasi' => $avg_estimasi_durasi,
-                        'timestamp_mulai' => Carbon::now(),
-                        'timestamp_selesai' => Carbon::now()->addMinutes($total_duration_minutes),
-                    ]);
+                // Massa awal & akhir (first/last non-null)
+                $massaAwal = null;
+                foreach ($valid as $r) { if ($r['weight'] !== null) { $massaAwal = $r['weight']; break; } }
+                $massaAkhir = null;
+                for ($i = count($valid) - 1; $i >= 0; $i--) { if ($valid[$i]['weight'] !== null) { $massaAkhir = $valid[$i]['weight']; break; } }
 
-                    // Save data per interval
-                    foreach ($mapped as $item) {
-                        // Skip if required fields are null
-                        if (is_null($item['interval_seconds']) || is_null($item['grain_moisture']) || is_null($item['grain_temperature'])) {
-                            Log::warning("Skipping invalid data in {$file} for interval {$item['interval_seconds']}: " . json_encode($item));
-                            continue;
-                        }
+                $baseTime = Carbon::now()->floorSecond();
 
-                        // Save to PredictionEstimation
-                        PredictionEstimation::create([
-                            'process_id' => $process->process_id,
-                            'estimasi_durasi' => $item['estimasi_minutes'],
-                            'timestamp' => Carbon::now()->addSeconds($item['interval_seconds']),
-                        ]);
+                DB::transaction(function () use ($valid, $grain_type_id, $baseTime, $first, $last, $durasiAkhirMenit, $massaAwal, $massaAkhir) {
+                    // 1) datasets_group
+                    $groupId = DB::table('datasets_group')->insertGetId([
+                        'grain_type_id'    => $grain_type_id,
+                        'kadar_air_awal'   => $this->dec7($first['grain_moisture']),
+                        'kadar_air_akhir'  => $this->dec7($last['grain_moisture']),
+                        'target_kadar_air' => $this->dec7($last['grain_moisture']),
+                        'massa_awal'       => $massaAwal,
+                        'massa_akhir'      => $massaAkhir,
+                        'durasi_aktual'    => $durasiAkhirMenit, // dari Estimasi(Menit) baris terakhir yang tersedia
+                        'created_at'       => now(),
+                        'updated_at'       => now(),
+                    ], 'group_id');
 
-                        // Save to SensorData
-                        foreach ($devices as $device_id => $device_info) {
-                            if ($device_id == 1) {
-                                SensorData::create([
-                                    'process_id' => $process->process_id,
-                                    'device_id' => $device_id,
-                                    'timestamp' => Carbon::now()->addSeconds($item['interval_seconds']),
-                                    'kadar_air_gabah' => $item['grain_moisture'],
-                                    'suhu_gabah' => $item['grain_temperature'],
-                                    'suhu_ruangan' => $item['room_temperature'],
-                                    'suhu_pembakaran' => $item['burn_temperature'],
-                                    'status_pengaduk' => false,
-                                ]);
-                            // } elseif ($device_id == 5) {
-                            //     SensorData::create([
-                            //         'process_id' => $process->process_id,
-                            //         'device_id' => $device_id,
-                            //         'timestamp' => Carbon::now()->addSeconds($item['interval_seconds']),
-                            //         'suhu_pembakaran' => $item['burn_temperature'],
-                            //         'status_pengaduk' => false,
-                            //     ]);
-                            }
-                        }
+                    // 2) datasets rows
+                    $batch = [];
+                    foreach ($valid as $item) {
+                        $ts = $baseTime->copy()->addSeconds($item['interval_seconds']);
+
+                        $batch[] = [
+                            'group_id'        => $groupId,
+                            'timestamp'       => $ts,
+                            'kadar_air_gabah' => $this->dec7($item['grain_moisture']),
+                            'suhu_gabah'      => $this->dec7($item['grain_temperature']),
+                            'suhu_ruangan'    => $this->dec7($item['room_temperature']),
+                            'suhu_pembakaran' => $this->dec7($item['burn_temperature']),
+                            'status_pengaduk' => false,
+                            // durasi_aktual per baris = Estimasi(Menit) dari Excel (boleh null jika kosong)
+                            'durasi_aktual'   => $item['estimasi_minutes'] !== null ? $this->dec7($item['estimasi_minutes']) : null,
+                            'created_at'      => now(),
+                            'updated_at'      => now(),
+                        ];
+                    }
+
+                    foreach (array_chunk($batch, 1000) as $chunk) {
+                        DB::table('datasets')->insert($chunk);
                     }
                 });
 
-                Log::info("Successfully imported data from {$file}. Avg Estimasi Durasi: {$avg_estimasi_durasi}");
-                echo "Successfully imported data from {$file}. Avg Estimasi Durasi: {$avg_estimasi_durasi}\n";
+                echo "Inserted ".count($valid)." dataset rows + 1 datasets_group record.\n";
+                Log::info("Inserted ".count($valid)." dataset rows + 1 datasets_group record.");
 
             } catch (\Exception $e) {
-                Log::error("Failed to process file {$file}: {$e->getMessage()}");
-                echo "Failed to process file {$file}: {$e->getMessage()}\n";
+                // Log::error("Failed to process file {$file}: {$e->getMessage()}");
+                // echo "Failed to process file {$file}: {$e->getMessage()}\n";
                 continue;
             }
         }
 
-        echo "Import process completed.\n";
-        Log::info("Import process completed.");
+        echo "Import to datasets & datasets_group completed.\n";
+        Log::info("Import to datasets & datasets_group completed.");
+    }
+
+    /** round ke 7 desimal (NUMERIC(10,7) akan menyimpan sebagai 7 digit) */
+    private function dec7($value)
+    {
+        return $value === null ? null : round((float)$value, 7);
     }
 }

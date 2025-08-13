@@ -12,29 +12,13 @@ use Illuminate\Validation\ValidationException;
 class WebAuthController extends Controller
 {
     /**
-     * Tampilkan form login.
-     * Tidak perlu method terpisah karena kita menggunakan closure di routes/web.php
-     * Public function showLoginForm() { return view('auth.login'); }
-     */
-
-    /**
-     * Tampilkan form register.
-     * Tidak perlu method terpisah karena kita menggunakan closure di routes/web.php
-     * Public function showRegisterForm() { return view('auth.register'); }
-     */
-
-    /**
      * Handle user registration for web.
-     *
-     * @param  \Illuminate\Http\Request  $request
-     * @return \Illuminate\Http\RedirectResponse
      */
     public function register(Request $request)
     {
         try {
             $request->validate([
                 'nama' => ['required', 'string', 'max:100'],
-                'username' => ['required', 'string', 'max:50', 'unique:users,username'],
                 'email' => ['required', 'string', 'email', 'max:100', 'unique:users,email'],
                 'password' => ['required', 'string', 'min:8', 'confirmed'],
                 'role' => ['nullable', 'in:admin,petani,operator'],
@@ -45,7 +29,6 @@ class WebAuthController extends Controller
 
         User::create([
             'nama' => $request->nama,
-            'username' => $request->username,
             'email' => $request->email,
             'password' => Hash::make($request->password),
             'role' => $request->role ?? 'petani',
@@ -57,15 +40,12 @@ class WebAuthController extends Controller
 
     /**
      * Handle user login for web.
-     *
-     * @param  \Illuminate\Http\Request  $request
-     * @return \Illuminate\Http\RedirectResponse
      */
     public function login(Request $request)
     {
         try {
             $request->validate([
-                'username' => ['required', 'string'],
+                'email' => ['required', 'string', 'email', 'max:100'],
                 'password' => ['required', 'string'],
             ]);
         } catch (ValidationException $e) {
@@ -73,37 +53,32 @@ class WebAuthController extends Controller
         }
 
         $credentials = [
-            'username' => $request->username,
+            'email' => $request->email,
             'password' => $request->password,
         ];
 
-        // Custom authentication based on username
         if (Auth::attempt($credentials)) {
             $request->session()->regenerate();
 
-            // Redirect berdasarkan role
             switch (Auth::user()->role) {
                 case 'admin':
-                    return redirect()->intended('/admin/dashboard'); // Ganti dengan route dashboard admin
+                    return redirect()->intended('/admin/dashboard');
                 case 'petani':
-                    return redirect()->intended('/petani/dashboard'); // Ganti dengan route dashboard petani
+                    return redirect()->intended('/petani/dashboard');
                 case 'operator':
-                    return redirect()->intended('/operator/dashboard'); // Ganti dengan route dashboard operator
+                    return redirect()->intended('/operator/dashboard');
                 default:
-                    return redirect()->intended('/dashboard'); // Default dashboard
+                    return redirect()->intended('/dashboard');
             }
         }
 
         return redirect()->back()->withErrors([
-            'username' => 'Username atau password salah.',
+            'email' => 'Email atau password salah.',
         ])->withInput();
     }
 
     /**
      * Handle user logout for web.
-     *
-     * @param  \Illuminate\Http\Request  $request
-     * @return \Illuminate\Http\RedirectResponse
      */
     public function logout(Request $request)
     {

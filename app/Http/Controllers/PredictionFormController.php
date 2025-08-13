@@ -5,57 +5,47 @@ namespace App\Http\Controllers;
 use App\Models\GrainType;
 use App\Models\DryingProcess;
 use App\Models\PredictionEstimation;
-use App\Models\SensorData;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Log;
 
 class PredictionFormController extends Controller
 {
-    public function show()
+    public function show(Request $request)
     {
-        try {
-            $grainTypes = GrainType::select('grain_type_id', 'nama_jenis')->get();
-            $activeProcess = DryingProcess::whereIn('status', ['pending', 'ongoing'])
-                ->select('process_id', 'status', 'berat_gabah_awal', 'kadar_air_target', 'grain_type_id', 'durasi_rekomendasi')
-                ->first();
+        $grainTypes = GrainType::orderBy('nama_jenis')->get();
 
-            $latestEstimation = null;
-            $isProcessComplete = false;
-            if ($activeProcess) {
-                $latestEstimation = PredictionEstimation::where('process_id', $activeProcess->process_id)
-                    ->orderBy('timestamp', 'desc')
-                    ->select('estimasi_durasi')
-                    ->first();
+        // Proses terakhir (boleh filter milik user jika perlu)
+        $activeProcess = DryingProcess::latest('created_at')->first();
 
-                // Periksa apakah proses memiliki data lengkap
-                $isProcessComplete = !is_null($activeProcess->grain_type_id) &&
-                                    !is_null($activeProcess->berat_gabah_awal) &&
-                                    !is_null($activeProcess->kadar_air_target);
+        $isProcessComplete = false;
+        $isProcessWaitingData = false;
+        $latestEstimation = null;
 
-                // Ambil data sensor terbaru
-                $latestSensorData = SensorData::where('process_id', $activeProcess->process_id)
-                    ->latest('timestamp')
-                    ->first();
+        if ($activeProcess) {
+            $isProcessComplete = $activeProcess->status === 'completed';
+
+            // Ambil estimasi terakhir kalau ada
+            $latestEstimation = PredictionEstimation::where('process_id', $activeProcess->process_id)
+                ->latest('timestamp')->first();
+
+            // Kalau proses tidak completed, tapi data input sudah lengkap → berarti tinggal tunggu sensor/prediksi
+            if (!$isProcessComplete &&
+                $activeProcess->grain_type_id &&
+                $activeProcess->berat_gabah_awal &&
+                $activeProcess->kadar_air_target) {
+                $isProcessWaitingData = true;
             }
-
-            return view('prediction_form', [
-                'grainTypes' => $grainTypes,
-                'activeProcess' => $activeProcess,
-                'latestEstimation' => $latestEstimation,
-                'isProcessComplete' => $isProcessComplete,
-                'latestSensorData' => $latestSensorData ?? null,
-                'error' => null
-            ]);
-        } catch (\Exception $e) {
-            Log::error('Error loading prediction form: ' . $e->getMessage());
-            return view('prediction_form', [
-                'grainTypes' => collect([]),
-                'activeProcess' => null,
-                'latestEstimation' => null,
-                'isProcessComplete' => false,
-                'latestSensorData' => null,
-                'error' => 'Gagal memuat data formulir. Silakan coba lagi.'
-            ]);
         }
+
+        // bedDryers diambil client-side via API
+        $bedDryers = collect();
+
+        return view('prediction_form', compact(
+            'grainTypes',
+            'bedDryers',
+            'activeProcess',
+            'isProcessComplete',
+            'isProcessWaitingData',
+            'latestEstimation'
+        ))->with('error', null);
     }
 }

@@ -23,7 +23,11 @@ Route::post('/register', [WebAuthController::class, 'register'])->name('register
 Route::post('/logout', [WebAuthController::class, 'logout'])->name('logout')->middleware('auth'); // Middleware 'auth' agar hanya user terautentikasi bisa logout
 
 // Contoh Dashboard (Anda harus membuatnya)
-Route::middleware('auth')->group(function () {
+Route::middleware('auth:sanctum')->group(function () {
+    // routes/web.php
+Route::get('/realtime-monitor', fn() => view('realtime_monitor'))->name('realtime.monitor');
+
+
     Route::get('/dashboard', function () {
         return "Selamat datang di Dashboard!";
     })->name('dashboard');

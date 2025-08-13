@@ -11,6 +11,9 @@ class SensorData extends Model
 
     protected $table = 'sensor_data';
     protected $primaryKey = 'sensor_id';
+    public $incrementing = true;
+    public $timestamps = true;
+
     protected $fillable = [
         'process_id',
         'device_id',
@@ -19,7 +22,14 @@ class SensorData extends Model
         'suhu_gabah',
         'suhu_ruangan',
         'suhu_pembakaran',
-        'status_pengaduk'
+        'status_pengaduk',
+    ];
+
+    protected $casts = [
+        'timestamp' => 'datetime',
+        'status_pengaduk' => 'boolean',
+        'created_at' => 'datetime',
+        'updated_at' => 'datetime',
     ];
 
     public function dryingProcess()
@@ -30,10 +40,5 @@ class SensorData extends Model
     public function sensorDevice()
     {
         return $this->belongsTo(SensorDevice::class, 'device_id', 'device_id');
-    }
-
-    public function device()
-    {
-        return $this->belongsTo(SensorDevice::class, 'device_id');
     }
 }

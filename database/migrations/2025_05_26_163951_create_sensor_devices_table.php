@@ -12,12 +12,19 @@ return new class extends Migration
     public function up(): void
     {
         Schema::create('sensor_devices', function (Blueprint $table) {
-            $table->increments('device_id'); 
-            $table->string('device_name', 50)->unique();
-            $table->string('address', 100); 
+            $table->increments('device_id');
+            $table->unsignedInteger('dryer_id'); // milik dryer tertentu
+            $table->string('device_name', 50);
+            $table->string('address', 100);
             $table->boolean('status')->default(false);
-            $table->timestamp('created_at')->useCurrent(); 
-            $table->timestamp('updated_at')->useCurrent()->useCurrentOnUpdate(); 
+            $table->timestamp('created_at')->useCurrent();
+            $table->timestamp('updated_at')->useCurrent()->useCurrentOnUpdate();
+
+            $table->foreign('dryer_id')->references('dryer_id')->on('bed_dryers')->onDelete('cascade');
+
+            // Unik per-bed dryer
+            $table->unique(['dryer_id', 'device_name']);
+            $table->unique(['dryer_id', 'address']);
         });
     }
 

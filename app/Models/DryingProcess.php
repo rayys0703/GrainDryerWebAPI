@@ -9,8 +9,10 @@ class DryingProcess extends Model
     protected $table = 'drying_process';
     protected $primaryKey = 'process_id';
     public $incrementing = true;
+    public $timestamps = true;
+
     protected $fillable = [
-        'user_id',
+        'dryer_id',               // <-- ganti dari user_id ke dryer_id
         'grain_type_id',
         'timestamp_mulai',
         'timestamp_selesai',
@@ -25,19 +27,35 @@ class DryingProcess extends Model
         'avg_estimasi_durasi',
         'status',
         'catatan',
-        'lokasi', 
+        // 'lokasi',               // <-- tidak ada lagi di drying_process (lokasi ada di bed_dryers)
     ];
 
+    protected $casts = [
+        'timestamp_mulai' => 'datetime',
+        'timestamp_selesai' => 'datetime',
+        'created_at' => 'datetime',
+        'updated_at' => 'datetime',
+    ];
+
+    /** Relasi ke dryer */
+    public function bedDryer()
+    {
+        return $this->belongsTo(BedDryer::class, 'dryer_id', 'dryer_id');
+    }
+
+    /** Jenis gabah */
     public function grainType()
     {
         return $this->belongsTo(GrainType::class, 'grain_type_id', 'grain_type_id');
     }
 
+    /** Data sensor per proses */
     public function sensorData()
     {
         return $this->hasMany(SensorData::class, 'process_id', 'process_id');
     }
 
+    /** Estimasi per interval */
     public function predictionEstimations()
     {
         return $this->hasMany(PredictionEstimation::class, 'process_id', 'process_id');

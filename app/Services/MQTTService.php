@@ -13,13 +13,13 @@ use PhpMqtt\Client\Exceptions\MqttClientException;
 class MQTTService
 {
     protected $client;
-    protected $topics = [];
+    protected $topics = [];         // device_id => {device_id, address, dryer_id}
     protected $sensorDataBuffer = [];
 
     public function __construct()
     {
         $this->topics = SensorDevice::where('status', true)
-            ->select('device_id', 'address')
+            ->select('device_id', 'address', 'dryer_id')
             ->get()
             ->keyBy('device_id');
 
@@ -27,12 +27,7 @@ class MQTTService
             Log::warning('No active sensor devices found in database');
         }
 
-        // $this->client = new MqttClient('broker.hivemq.com', 1883, 'laravel-client-' . uniqid());
         $this->client = new MqttClient('127.0.0.1', 4321, 'laravel-client-' . uniqid());
-        // $this->client->connect(null, true, [
-        //     'username' => 'graindryer',
-        //     'password' => 'polindra'
-        // ]);
         $this->client->connect();
     }
 
@@ -62,43 +57,41 @@ class MQTTService
             }
 
             $panel_id = (int) $data['panel_id'];
-            $device = $this->topics->get($panel_id);
+            $device   = $this->topics->get($panel_id);
             if (!$device || $device->address !== $topic) {
                 Log::error('Invalid panel_id or topic mismatch', ['panel_id' => $panel_id, 'topic' => $topic]);
                 return;
             }
 
-            // Buat atau ambil DryingProcess
-            $dryingProcess = DryingProcess::whereIn('status', ['pending', 'ongoing'])->first();
+            // Proses per dryer
+            $dryingProcess = DryingProcess::where('dryer_id', $device->dryer_id)
+                ->whereIn('status', ['pending', 'ongoing'])
+                ->first();
+
             if (!$dryingProcess) {
                 $dryingProcess = DryingProcess::create([
-                    'status' => 'pending',
-                    'user_id' => 1, // Default user_id
-                    'timestamp_mulai' => null,
-                    'grain_type_id' => null,
-                    'berat_gabah_awal' => null,
-                    'kadar_air_target' => null,
+                    'dryer_id'           => $device->dryer_id,
+                    'status'             => 'pending',
+                    'timestamp_mulai'    => null,
+                    'grain_type_id'      => null,
+                    'berat_gabah_awal'   => null,
+                    'kadar_air_target'   => null,
                     'durasi_rekomendasi' => 0,
                 ]);
-                Log::info('Created new pending drying process', ['process_id' => $dryingProcess->process_id]);
             }
 
-            // Simpan data sementara di buffer
             $this->sensorDataBuffer[$panel_id] = [
-                'process_id' => $dryingProcess->process_id,
-                'device_id' => $panel_id,
-                'timestamp' => now(),
-                'kadar_air_gabah' => isset($data['grain_moisture']) ? (float) $data['grain_moisture'] : null,
-                'suhu_gabah' => isset($data['grain_temperature']) ? (float) $data['grain_temperature'] : null,
-                'suhu_ruangan' => isset($data['room_temperature']) ? (float) $data['room_temperature'] : null,
-                'suhu_pembakaran' => isset($data['burning_temperature']) ? (float) $data['burning_temperature'] : null,
-                'status_pengaduk' => isset($data['stirrer_status']) ? (bool) $data['stirrer_status'] : null,
+                'process_id'       => $dryingProcess->process_id,
+                'device_id'        => $panel_id,
+                'timestamp'        => now(),
+                'kadar_air_gabah'  => isset($data['grain_moisture']) ? (float) $data['grain_moisture'] : null,
+                'suhu_gabah'       => isset($data['grain_temperature']) ? (float) $data['grain_temperature'] : null,
+                'suhu_ruangan'     => isset($data['room_temperature']) ? (float) $data['room_temperature'] : null,
+                'suhu_pembakaran'  => isset($data['burning_temperature']) ? (float) $data['burning_temperature'] : null,
+                'status_pengaduk'  => isset($data['stirrer_status']) ? (bool) $data['stirrer_status'] : null,
             ];
-            Log::info('Stored in buffer', ['panel_id' => $panel_id, 'buffer_size' => count($this->sensorDataBuffer)]);
 
-            // Proses data hanya jika semua topik telah mengirim data
             if (count($this->sensorDataBuffer) === $this->topics->count()) {
-                Log::info('Buffer complete, processing data', ['buffer' => $this->sensorDataBuffer]);
                 $this->processAndSendData($dryingProcess);
             }
         } catch (\Exception $e) {
@@ -109,67 +102,50 @@ class MQTTService
     protected function processAndSendData($dryingProcess)
     {
         try {
-            // Simpan semua data sensor ke database
             foreach ($this->sensorDataBuffer as $data) {
-                SensorData::create([
-                    'process_id' => $data['process_id'],
-                    'device_id' => $data['device_id'],
-                    'timestamp' => $data['timestamp'],
-                    'kadar_air_gabah' => $data['kadar_air_gabah'],
-                    'suhu_gabah' => $data['suhu_gabah'],
-                    'suhu_ruangan' => $data['suhu_ruangan'],
-                    'suhu_pembakaran' => $data['suhu_pembakaran'],
-                    'status_pengaduk' => $data['status_pengaduk'],
-                ]);
+                SensorData::create($data);
             }
             Log::info('Sensor data saved', ['process_id' => $dryingProcess->process_id, 'records' => count($this->sensorDataBuffer)]);
 
-            // Periksa apakah DryingProcess memiliki data lengkap sebelum mengirim ke ML
             if (is_null($dryingProcess->grain_type_id) || is_null($dryingProcess->berat_gabah_awal) || is_null($dryingProcess->kadar_air_target)) {
-                Log::info('Incomplete drying process data, skipping ML prediction', ['process_id' => $dryingProcess->process_id]);
                 $this->sensorDataBuffer = [];
                 return;
             }
 
-            $buffer_age = time() - min(array_map(fn($data) => $data['timestamp']->timestamp, $this->sensorDataBuffer));
+            $buffer_age = time() - min(array_map(fn($d) => $d['timestamp']->timestamp, $this->sensorDataBuffer));
             if ($buffer_age > 60) {
-                Log::warning('Buffer timeout, clearing incomplete data');
                 $this->sensorDataBuffer = [];
                 return;
             }
 
-            $points = [];
-            foreach ($this->sensorDataBuffer as $data) {
-                $points[] = [
-                    'point_id' => $data['device_id'],
-                    'grain_temperature' => $data['suhu_gabah'],
-                    'grain_moisture' => $data['kadar_air_gabah'],
-                    'room_temperature' => $data['suhu_ruangan'],
-                    'burning_temperature' => $data['suhu_pembakaran'],
-                    'stirrer_status' => $data['status_pengaduk'],
-                ];
+            $suhu_gabah_values      = array_filter(array_column($this->sensorDataBuffer, 'suhu_gabah'), fn($v) => !is_null($v));
+            $kadar_air_gabah_values = array_filter(array_column($this->sensorDataBuffer, 'kadar_air_gabah'), fn($v) => !is_null($v));
+            $suhu_ruangan_values    = array_filter(array_column($this->sensorDataBuffer, 'suhu_ruangan'), fn($v) => !is_null($v));
+            $suhu_pembakaran_values = array_filter(array_column($this->sensorDataBuffer, 'suhu_pembakaran'), fn($v) => !is_null($v));
+            $status_pengaduk_values = array_filter(array_column($this->sensorDataBuffer, 'status_pengaduk'), fn($v) => !is_null($v));
+
+            if (empty($suhu_gabah_values) || empty($kadar_air_gabah_values) || empty($suhu_ruangan_values) || empty($suhu_pembakaran_values) || empty($status_pengaduk_values)) {
+                $this->sensorDataBuffer = [];
+                return;
             }
 
             $payload = [
-                'process_id' => $dryingProcess->process_id,
-                'grain_type_id' => $dryingProcess->grain_type_id,
-                'points' => $points,
-                'weight' => (float) $dryingProcess->berat_gabah_awal,
-                'timestamp' => time()
+                'process_id'        => $dryingProcess->process_id,
+                'grain_type_id'     => $dryingProcess->grain_type_id,
+                'suhu_gabah'        => number_format(array_sum($suhu_gabah_values) / count($suhu_gabah_values), 7, '.', ''),
+                'kadar_air_gabah'   => number_format(array_sum($kadar_air_gabah_values) / count($kadar_air_gabah_values), 7, '.', ''),
+                'suhu_ruangan'      => number_format(array_sum($suhu_ruangan_values) / count($suhu_ruangan_values), 7, '.', ''),
+                'suhu_pembakaran'   => number_format(array_sum($suhu_pembakaran_values) / count($suhu_pembakaran_values), 7, '.', ''),
+                'status_pengaduk'   => (bool) reset($status_pengaduk_values),
+                'kadar_air_target'  => (float) $dryingProcess->kadar_air_target,
+                'weight'            => (float) $dryingProcess->berat_gabah_awal,
+                'timestamp'         => time(),
             ];
 
-
             $response = Http::timeout(10)->post(env('ML_API') . '/predict-now', $payload);
-            if ($response->successful()) {
-                Log::info('Data sent to prediction service', [
-                    'process_id' => $dryingProcess->process_id,
-                    'payload' => $payload
-                ]);
-            } else {
+            if (!$response->successful()) {
                 Log::error('Failed to send data to prediction service', [
-                    'status' => $response->status(),
-                    'body' => $response->body(),
-                    'payload' => $payload
+                    'status' => $response->status(), 'body' => $response->body()
                 ]);
             }
 
