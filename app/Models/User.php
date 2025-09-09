@@ -12,12 +12,11 @@ class User extends Authenticatable
     use HasApiTokens, HasFactory, Notifiable;
 
     protected $table = 'users';
-    protected $primaryKey = 'user_id';
+    protected $primaryKey = 'id';
 
     protected $fillable = [
-        'username',
         'password',
-        'nama',
+        'name',
         'email',
         'role',
     ];
@@ -38,12 +37,12 @@ class User extends Authenticatable
 
     public function warehouses()
     {
-        return $this->hasMany(Warehouse::class, 'user_id', 'user_id');
+        return $this->hasMany(Warehouse::class, 'user_id', 'id');
     }
 
     /** Semua dryer milik user */
     public function bedDryers()
     {
-        return $this->hasMany(BedDryer::class, 'user_id', 'user_id');
+        return $this->hasMany(BedDryer::class, 'user_id', 'id');
     }
 }

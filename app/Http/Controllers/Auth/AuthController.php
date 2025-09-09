@@ -32,7 +32,7 @@ class AuthController extends Controller
         return response()->json([
             'token' => $token,
             'user'  => [
-                'user_id' => $user->user_id,
+                'user_id' => $user->id,
                 'nama'    => $user->nama,
                 'role'    => $user->role,
                 'email'   => $user->email,
@@ -63,7 +63,7 @@ class AuthController extends Controller
                 'warehouse:warehouse_id,nama',
                 'devices:device_id,dryer_id,device_name,address,location,status'
             ])
-            ->where('user_id', $user->user_id)
+            ->where('user_id', $user->id)
             ->orderBy('nama')
             ->get();
 

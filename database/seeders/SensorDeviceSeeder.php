@@ -20,7 +20,7 @@ class SensorDeviceSeeder extends Seeder
 
         // 2) Pastikan ada warehouse (gudang) milik owner
         $warehouse = Warehouse::firstOrCreate(
-            ['user_id' => $owner->user_id, 'nama' => 'Gudang A'],
+            ['user_id' => $owner->id, 'nama' => 'Gudang A'],
             [
                 'deskripsi'  => 'Gudang utama untuk pengujian & operasional',
             ]
@@ -29,7 +29,7 @@ class SensorDeviceSeeder extends Seeder
         // 3) Pastikan ada bed dryer milik owner dan ditautkan ke warehouse
         $dryer = BedDryer::firstOrCreate(
             [
-                'user_id'      => $owner->user_id,
+                'user_id'      => $owner->id,
                 'warehouse_id' => $warehouse->warehouse_id,
                 'nama'         => 'Bed Dryer Utama',
             ],
@@ -95,7 +95,7 @@ class SensorDeviceSeeder extends Seeder
 
         // 2) Pastikan ada warehouse (gudang) milik user
         $warehouse = Warehouse::firstOrCreate(
-            ['user_id' => $owner->user_id, 'nama' => 'Gudang A'],
+            ['user_id' => $owner->id, 'nama' => 'Gudang A'],
             [
                 'deskripsi'  => 'Gudang utama untuk pengujian & operasional',
             ]
@@ -104,7 +104,7 @@ class SensorDeviceSeeder extends Seeder
         // 3) Buat 2 bed dryer milik owner dan ditautkan ke warehouse
         $dryer1 = BedDryer::firstOrCreate(
             [
-                'user_id'      => $owner->user_id,
+                'user_id'      => $owner->id,
                 'warehouse_id' => $warehouse->warehouse_id,
                 'nama'         => 'Bed Dryer 1',
             ],
@@ -115,7 +115,7 @@ class SensorDeviceSeeder extends Seeder
 
         $dryer2 = BedDryer::firstOrCreate(
             [
-                'user_id'      => $owner->user_id,
+                'user_id'      => $owner->id,
                 'warehouse_id' => $warehouse->warehouse_id,
                 'nama'         => 'Bed Dryer 2',
             ],

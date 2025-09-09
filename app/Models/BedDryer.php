@@ -29,7 +29,7 @@ class BedDryer extends Model
     /** Owner / pemilik dryer */
     public function owner()
     {
-        return $this->belongsTo(User::class, 'user_id', 'user_id');
+        return $this->belongsTo(User::class, 'user_id', 'id');
     }
 
     public function warehouse()

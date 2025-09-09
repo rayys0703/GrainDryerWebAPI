@@ -35,7 +35,7 @@ class PredictionController extends Controller
 
             // Opsional: pastikan dryer milik user (kalau kebijakan demikian)
             $dryer = BedDryer::where('dryer_id', $request->dryer_id)
-                ->when($user && $user->role !== 'admin', fn($q) => $q->where('user_id', $user->user_id))
+                ->when($user && $user->role !== 'admin', fn($q) => $q->where('user_id', $user->id))
                 ->firstOrFail();
 
             // Cari proses pending/ongoing pada dryer ini; kalau tidak ada buat pending
