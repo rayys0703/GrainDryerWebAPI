@@ -22,7 +22,7 @@ class TrainingFileExcelSeeder extends Seeder
             return;
         }
 
-        $grainType = GrainType::where('nama_jenis', 'Ciherang')->first() ?? GrainType::first();
+        $grainType = GrainType::first();
         if (!$grainType) {
             throw new \RuntimeException('Grain type tidak ditemukan. Seed grain_types terlebih dahulu.');
         }
@@ -93,8 +93,8 @@ class TrainingFileExcelSeeder extends Seeder
                 $baseTime = Carbon::now()->floorSecond();
 
                 DB::transaction(function () use ($valid, $grain_type_id, $baseTime, $first, $last, $durasiAkhirMenit, $massaAwal, $massaAkhir) {
-                    // 1) datasets_group
-                    $groupId = DB::table('datasets_group')->insertGetId([
+                    // 1) training_group
+                    $groupId = DB::table('training_group')->insertGetId([
                         'grain_type_id'    => $grain_type_id,
                         'kadar_air_awal'   => $this->dec7($first['grain_moisture']),
                         'kadar_air_akhir'  => $this->dec7($last['grain_moisture']),
@@ -106,7 +106,7 @@ class TrainingFileExcelSeeder extends Seeder
                         'updated_at'       => now(),
                     ], 'group_id');
 
-                    // 2) datasets rows
+                    // 2) training_data rows
                     $batch = [];
                     foreach ($valid as $item) {
                         $ts = $baseTime->copy()->addSeconds($item['interval_seconds']);
@@ -127,12 +127,12 @@ class TrainingFileExcelSeeder extends Seeder
                     }
 
                     foreach (array_chunk($batch, 1000) as $chunk) {
-                        DB::table('datasets')->insert($chunk);
+                        DB::table('training_data')->insert($chunk);
                     }
                 });
 
-                echo "Inserted ".count($valid)." dataset rows + 1 datasets_group record.\n";
-                Log::info("Inserted ".count($valid)." dataset rows + 1 datasets_group record.");
+                echo "Inserted ".count($valid)." dataset rows + 1 training_group record.\n";
+                Log::info("Inserted ".count($valid)." dataset rows + 1 training_group record.");
 
             } catch (\Exception $e) {
                 // Log::error("Failed to process file {$file}: {$e->getMessage()}");
@@ -141,8 +141,8 @@ class TrainingFileExcelSeeder extends Seeder
             }
         }
 
-        echo "Import to datasets & datasets_group completed.\n";
-        Log::info("Import to datasets & datasets_group completed.");
+        echo "Import to training_data & training_group completed.\n";
+        Log::info("Import to training_data & training_group completed.");
     }
 
     /** round ke 7 desimal (NUMERIC(10,7) akan menyimpan sebagai 7 digit) */

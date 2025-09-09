@@ -11,11 +11,9 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('datasets', function (Blueprint $table) {
-            $table->increments('dataset_id');
-            $table->unsignedInteger('group_id')->nullable();
+        Schema::create('training_data', function (Blueprint $table) {
+            $table->increments('training_id');
 
-            $table->dateTime('timestamp')->nullable();
 
             $table->decimal('kadar_air_gabah', 10, 7)->nullable();
             $table->decimal('suhu_gabah', 10, 7)->nullable();
@@ -24,10 +22,12 @@ return new class extends Migration
             $table->boolean('status_pengaduk')->default(false);
 
             $table->decimal('durasi_aktual', 20, 7)->nullable();           // durasi aktual (menit)
+            $table->dateTime('timestamp')->nullable();
+            $table->unsignedInteger('group_id')->nullable();
 
             $table->timestamps();
 
-            $table->foreign('group_id')->references('group_id')->on('datasets_group')->onDelete('set null');
+            $table->foreign('group_id')->references('group_id')->on('training_group')->onDelete('set null');
 
             $table->index(['timestamp']);
             $table->index(['group_id']);
@@ -39,6 +39,6 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::dropIfExists('datasets');
+        Schema::dropIfExists('training_data');
     }
 };

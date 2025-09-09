@@ -87,13 +87,13 @@ class SensorDeviceSeeder extends Seeder
 {
     public function run(): void
     {
-        // 1) Pastikan owner (admin) ada
-        $owner = User::where('email', 'rayya@gmail.com')->first() ?? User::first();
+        // 1) Pastikan terdapat akun user
+        $owner = User::first();
         if (!$owner) {
-            throw new \RuntimeException('User owner tidak ditemukan. Jalankan UserSeeder dulu.');
+            throw new \RuntimeException('User tidak ditemukan. Jalankan UserSeeder dulu.');
         }
 
-        // 2) Pastikan ada warehouse (gudang) milik owner
+        // 2) Pastikan ada warehouse (gudang) milik user
         $warehouse = Warehouse::firstOrCreate(
             ['user_id' => $owner->user_id, 'nama' => 'Gudang A'],
             [
@@ -106,7 +106,7 @@ class SensorDeviceSeeder extends Seeder
             [
                 'user_id'      => $owner->user_id,
                 'warehouse_id' => $warehouse->warehouse_id,
-                'nama'         => 'Bed Dryer Utama',
+                'nama'         => 'Bed Dryer 1',
             ],
             [
                 'deskripsi' => 'Unit utama untuk pengujian',
@@ -117,7 +117,7 @@ class SensorDeviceSeeder extends Seeder
             [
                 'user_id'      => $owner->user_id,
                 'warehouse_id' => $warehouse->warehouse_id,
-                'nama'         => 'Bed Dryer Sekunder',
+                'nama'         => 'Bed Dryer 2',
             ],
             [
                 'deskripsi' => 'Unit sekunder untuk pengujian tambahan',
@@ -129,14 +129,14 @@ class SensorDeviceSeeder extends Seeder
             [
                 'device_id'   => 1,
                 'device_name' => 'Tombak 1',
-                'address'     => 'iot/sensor/datagabah/1',
+                'address'     => 'iot/mitra1/dryer1/1',
                 'location'    => 'Sudut Kiri',
                 'status'      => true,
             ],
             [
                 'device_id'   => 5,
                 'device_name' => 'Pembakaran & Pengaduk',
-                'address'     => 'iot/sensor/pembakaran/5',
+                'address'     => 'iot/mitra1/dryer1/5',
                 'location'    => 'Pipa Blower / Pemanas',
                 'status'      => true,
             ],
@@ -144,41 +144,41 @@ class SensorDeviceSeeder extends Seeder
 
         // 5) Daftar device untuk dryer kedua (5 perangkat)
         $devicesDryer2 = [
-            [
-                'device_id'   => 6,
-                'device_name' => 'Tombak 1',
-                'address'     => 'iot/sensor/datagabah2/1',
-                'location'    => 'Sudut Kanan',
-                'status'      => true,
-            ],
+            // [
+            //     'device_id'   => 6,
+            //     'device_name' => 'Tombak 1',
+            //     'address'     => 'iot/sensor/datagabah2/1',
+            //     'location'    => 'Sudut Kanan',
+            //     'status'      => true,
+            // ],
             [
                 'device_id'   => 7,
-                'device_name' => 'Tombak 2',
-                'address'     => 'iot/sensor/datagabah2/2',
-                'location'    => 'Pintu Masuk',
+                'device_name' => 'Sudut Kiri',
+                'address'     => 'iot/mitra1/dryer2/7',
+                'location'    => 'Sudut Kiri',
                 'status'      => true,
             ],
-            [
-                'device_id'   => 8,
-                'device_name' => 'Tombak 3',
-                'address'     => 'iot/sensor/datagabah2/3',
-                'location'    => 'Pintu Keluar',
-                'status'      => true,
-            ],
-            [
-                'device_id'   => 9,
-                'device_name' => 'Tombak 4',
-                'address'     => 'iot/sensor/datagabah2/4',
-                'location'    => 'Tengah',
-                'status'      => true,
-            ],
-            [
-                'device_id'   => 10,
-                'device_name' => 'Pembakaran & Pengaduk',
-                'address'     => 'iot/sensor/datagabah2/5',
-                'location'    => 'Atas',
-                'status'      => true,
-            ],
+            // [
+            //     'device_id'   => 8,
+            //     'device_name' => 'Tombak 3',
+            //     'address'     => 'iot/sensor/datagabah2/3',
+            //     'location'    => 'Pintu Keluar',
+            //     'status'      => true,
+            // ],
+            // [
+            //     'device_id'   => 9,
+            //     'device_name' => 'Tombak 4',
+            //     'address'     => 'iot/sensor/datagabah2/4',
+            //     'location'    => 'Tengah',
+            //     'status'      => true,
+            // ],
+            // [
+            //     'device_id'   => 10,
+            //     'device_name' => 'Pembakaran & Pengaduk',
+            //     'address'     => 'iot/sensor/datagabah2/5',
+            //     'location'    => 'Atas',
+            //     'status'      => true,
+            // ],
         ];
 
         // 6) Upsert device untuk dryer pertama
@@ -198,19 +198,19 @@ class SensorDeviceSeeder extends Seeder
         }
 
         // 7) Upsert device untuk dryer kedua
-        foreach ($devicesDryer2 as $d) {
-            SensorDevice::updateOrCreate(
-                [
-                    'device_id'   => $d['device_id'],
-                ],
-                [
-                    'dryer_id'    => $dryer2->dryer_id,
-                    'device_name' => $d['device_name'],
-                    'address'     => $d['address'],
-                    'location'    => $d['location'] ?? null,
-                    'status'      => (bool) $d['status'],
-                ]
-            );
-        }
+        // foreach ($devicesDryer2 as $d) {
+        //     SensorDevice::updateOrCreate(
+        //         [
+        //             'device_id'   => $d['device_id'],
+        //         ],
+        //         [
+        //             'dryer_id'    => $dryer2->dryer_id,
+        //             'device_name' => $d['device_name'],
+        //             'address'     => $d['address'],
+        //             'location'    => $d['location'] ?? null,
+        //             'status'      => (bool) $d['status'],
+        //         ]
+        //     );
+        // }
     }
 }

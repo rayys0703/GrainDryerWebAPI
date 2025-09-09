@@ -10,9 +10,8 @@ class UserSeeder extends Seeder
 {
     public function run(): void
     {
-        // akun admin default
         User::updateOrCreate(
-            ['email' => 'rayya@gmail.com'], // kunci pakai email
+            ['email' => 'rayya@gmail.com'],
             [
                 'nama' => 'Rayya RR',
                 'password' => Hash::make('123123123'),
@@ -20,9 +19,8 @@ class UserSeeder extends Seeder
             ]
         );
 
-        // akun operator
         User::updateOrCreate(
-            ['email' => 'operator@gmail.com'], // kunci pakai email
+            ['email' => 'operator@gmail.com'],
             [
                 'nama' => 'Operator Lapangan',
                 'password' => Hash::make('123123123'),

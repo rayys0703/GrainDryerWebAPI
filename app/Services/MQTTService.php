@@ -5,29 +5,49 @@ namespace App\Services;
 use App\Models\DryingProcess;
 use App\Models\SensorData;
 use App\Models\SensorDevice;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use PhpMqtt\Client\MqttClient;
 use PhpMqtt\Client\Exceptions\MqttClientException;
+use PhpMqtt\Client\ConnectionSettings;
 
 class MQTTService
 {
     /** @var MqttClient */
     protected $client;
 
-    /** @var array<int, array> dryer_id => [ [device_id, address, dryer_id], ... ] */
+    /** @var string */
+    protected $host = 'broker.hivemq.com';
+    /** @var int */
+    protected $port = 1883;
+
+    /** @var string unique client id */
+    protected $clientId;
+
+    /** @var int keep alive seconds */
+    protected $keepAlive = 30;
+
+    /** @var int loop sleep microseconds */
+    protected $loopSleepMicros = 200000; // 0.2s
+
+    /** @var string wildcard untuk pendaftaran perangkat */
+    protected $registrationWildcard = 'iot/+/+/+/connect';
+
+    /** @var array<int, array> dryer_id => [ device_id => meta, ... ] */
     protected $devicesByDryer = [];
 
-    /** @var array<string, array> topic => [device_id, address, dryer_id] */
+    /** @var array<string, array> topic => meta */
     protected $topicMap = [];
+
+    /** @var array<string, bool> seluruh topic telemetry yang saat ini disubscribe */
+    protected $currentSubscriptions = [];
 
     /** @var array<int, array<int, array>> buffers per dryer: buffers[dryer_id][device_id] = data array */
     protected $buffers = [];
 
-    /** @var array<string, bool> daftar topic yang saat ini disubscribe */
-    protected $currentSubscriptions = [];
-
-    /** @var int detik antara refresh daftar device */
+    /** @var int detik antara refresh daftar device dari DB */
     protected $refreshInterval = 15;
 
     /** @var int timestamp terakhir refresh */
@@ -36,168 +56,313 @@ class MQTTService
     /** @var int window maksimal umur data buffer (detik) untuk dianggap satu batch */
     protected $bufferWindowSeconds = 60;
 
+    /** @var bool flag untuk menghindari reconnect bersamaan */
+    protected $isReconnecting = false;
+
     public function __construct()
     {
-        $this->client = new MqttClient('127.0.0.1', 4321, 'laravel-client-' . uniqid('', true));
-        $this->client->connect();
-
-        // initial load + subscribe
-        $this->reloadDevicesAndSyncSubscriptions(true);
+        $this->clientId = 'laravel-client-' . uniqid('', true);
+        $this->connectAndBootstrap();
     }
 
-    /**
-     * Loop MQTT + refresh device secara periodik.
-     */
     public function subscribe()
     {
-        try {
-            Log::info('MQTT loop started');
+        Log::info('MQTT loop started');
 
-            while (true) {
-                // Proses pesan yang masuk (non-blocking loop sekali)
-                $this->client->loop(false);
+        while (true) {
+            try {
+                if (!$this->client || !$this->client->isConnected()) {
+                    $this->attemptReconnect('disconnected in loop');
+                    usleep($this->loopSleepMicros);
+                    continue;
+                }
 
-                // Periodik: refresh daftar device dan sync subscription
+                $this->client->loop(true);
                 $this->maybeRefreshDevices();
 
-                // kecilkan CPU usage
-                usleep(200000); // 0.2s
+                usleep($this->loopSleepMicros);
+            } catch (\Throwable $e) {
+                Log::error('MQTT loop exception: ' . $e->getMessage());
+                $this->attemptReconnect('loop exception');
             }
-        } catch (MqttClientException $e) {
-            Log::error('Failed in MQTT loop: ' . $e->getMessage());
-        } catch (\Throwable $e) {
-            Log::error('Unexpected error in MQTT loop: ' . $e->getMessage());
         }
     }
 
-    /**
-     * Cek apakah perlu refresh device.
-     */
+    protected function connectAndBootstrap(): void
+    {
+        $this->connectClient();
+        $this->subscribeRegistrationWildcard();
+        $this->reloadDevicesAndSyncSubscriptions(true);
+    }
+
+    protected function connectClient(): void
+    {
+        try {
+            if ($this->client) {
+                $this->client->disconnect();
+            }
+        } catch (\Throwable $e) {
+            // ignore
+        }
+
+        $this->client = new MqttClient($this->host, $this->port, $this->clientId);
+
+        $settings = new ConnectionSettings();
+        if (method_exists($settings, 'setKeepAliveInterval')) {
+            $settings->setKeepAliveInterval($this->keepAlive);
+        }
+
+        $this->client->connect($settings, true);
+
+        Log::info('MQTT connected', [
+            'host' => $this->host,
+            'port' => $this->port,
+            'client_id' => $this->clientId,
+            'keep_alive' => $this->keepAlive,
+        ]);
+    }
+
+    protected function attemptReconnect(string $reason): void
+    {
+        if ($this->isReconnecting) return;
+        $this->isReconnecting = true;
+
+        Log::warning("Attempting MQTT reconnect: {$reason}");
+
+        $attempt = 0;
+        $maxDelay = 10; // seconds
+        while (true) {
+            try {
+                $delay = min($maxDelay, 1 << min($attempt, 3)); // 1,2,4,8,8,8...
+                if ($attempt > 0) sleep($delay);
+
+                $this->connectClient();
+                $this->subscribeRegistrationWildcard();
+                $this->reloadDevicesAndSyncSubscriptions(true);
+
+                $this->isReconnecting = false;
+                Log::info('MQTT reconnected successfully');
+                return;
+            } catch (\Throwable $e) {
+                $attempt++;
+                Log::error("Reconnect attempt #{$attempt} failed: " . $e->getMessage());
+            }
+        }
+    }
+
+    protected function subscribeRegistrationWildcard(): void
+    {
+        try {
+            $this->client->subscribe($this->registrationWildcard, function ($topic, $payload) {
+                $this->handleConnectMessage($topic, $payload);
+            }, 0);
+            Log::info("Subscribed registration wildcard: {$this->registrationWildcard}");
+        } catch (\Throwable $e) {
+            Log::error('Failed to subscribe registration wildcard: ' . $e->getMessage());
+        }
+    }
+
     protected function maybeRefreshDevices(): void
     {
         $now = time();
         if ($now - $this->lastRefreshAt >= $this->refreshInterval) {
-            $this->reloadDevicesAndSyncSubscriptions();
+            $this->reloadDevicesAndSyncSubscriptions(false);
         }
     }
 
-    /**
-     * Muat ulang device dari DB, kelompokkan per dryer, dan sinkronkan subscribe/unsubscribe topik.
-     */
-    protected function reloadDevicesAndSyncSubscriptions(bool $initial = false): void
+    protected function reloadDevicesAndSyncSubscriptions(bool $initial): void
     {
         $this->lastRefreshAt = time();
 
-        // Ambil device aktif
         $devices = SensorDevice::where('status', true)
             ->select('device_id', 'address', 'dryer_id')
             ->get();
 
-        // Build struktur baru
         $newTopicMap = [];
         $newDevicesByDryer = [];
         foreach ($devices as $d) {
-            if (empty($d->address) || empty($d->dryer_id)) {
-                continue;
-            }
-            $newTopicMap[$d->address] = [
+            if (empty($d->address) || empty($d->dryer_id)) continue;
+
+            $meta = [
                 'device_id' => (int) $d->device_id,
                 'address'   => (string) $d->address,
                 'dryer_id'  => (int) $d->dryer_id,
             ];
-            $newDevicesByDryer[$d->dryer_id] ??= [];
-            $newDevicesByDryer[$d->dryer_id][$d->device_id] = [
-                'device_id' => (int) $d->device_id,
-                'address'   => (string) $d->address,
-                'dryer_id'  => (int) $d->dryer_id,
-            ];
+            $newTopicMap[$d->address] = $meta;
+            $newDevicesByDryer[$d->dryer_id][$d->device_id] = $meta;
         }
 
-        // Hitung perbedaan subscription
         $oldTopics = array_keys($this->currentSubscriptions);
         $newTopics = array_keys($newTopicMap);
+
         $toSubscribe   = array_diff($newTopics, $oldTopics);
         $toUnsubscribe = array_diff($oldTopics, $newTopics);
 
-        // Unsubscribe topik yang hilang
         foreach ($toUnsubscribe as $topic) {
             try {
                 $this->client->unsubscribe($topic);
                 unset($this->currentSubscriptions[$topic]);
-                Log::info("Unsubscribed from topic: {$topic}");
+                Log::info("Unsubscribed telemetry: {$topic}");
             } catch (\Throwable $e) {
-                Log::warning("Failed to unsubscribe topic {$topic}: " . $e->getMessage());
+                Log::warning("Failed to unsubscribe {$topic}: " . $e->getMessage());
             }
 
-            // Bersihkan buffer device terkait (jika ada)
             if (isset($this->topicMap[$topic])) {
                 $dryerId  = $this->topicMap[$topic]['dryer_id'];
                 $deviceId = $this->topicMap[$topic]['device_id'];
                 unset($this->buffers[$dryerId][$deviceId]);
-                if (empty($this->buffers[$dryerId])) {
-                    unset($this->buffers[$dryerId]);
-                }
+                if (empty($this->buffers[$dryerId])) unset($this->buffers[$dryerId]);
             }
         }
 
-        // Subscribe topik baru
         foreach ($toSubscribe as $topic) {
-            try {
-                $this->client->subscribe($topic, function ($incomingTopic, $message) {
-                    $this->handleMessage($incomingTopic, $message);
-                }, 0);
-                $this->currentSubscriptions[$topic] = true;
-                Log::info("Subscribed to topic: {$topic}");
-            } catch (\Throwable $e) {
-                Log::error("Failed to subscribe topic {$topic}: " . $e->getMessage());
-            }
+            $this->subscribeTelemetryTopic($topic, $newTopicMap[$topic] ?? null);
         }
 
-        // Update peta dan grup setelah sync
         $this->topicMap = $newTopicMap;
         $this->devicesByDryer = $newDevicesByDryer;
 
-        if ($initial) {
-            Log::info('Initial MQTT subscriptions synced: ' . implode(', ', array_keys($this->currentSubscriptions)));
-        } else {
-            Log::info('Refreshed MQTT subscriptions. Now subscribed: ' . implode(', ', array_keys($this->currentSubscriptions)));
+        $label = $initial ? 'Initial' : 'Refreshed';
+        Log::info("{$label} telemetry topics: " . implode(', ', array_keys($this->currentSubscriptions)));
+    }
+
+    protected function subscribeTelemetryTopic(string $topic, ?array $meta): void
+    {
+        if (!$meta) return;
+
+        try {
+            $this->client->subscribe($topic, function ($incomingTopic, $message) {
+                $this->handleTelemetryMessage($incomingTopic, $message);
+            }, 0);
+            $this->currentSubscriptions[$topic] = true;
+
+            $this->topicMap[$topic] = $meta;
+            $this->devicesByDryer[$meta['dryer_id']][$meta['device_id']] = $meta;
+
+            Log::info("Subscribed telemetry: {$topic}");
+        } catch (\Throwable $e) {
+            Log::error("Failed telemetry subscribe {$topic}: " . $e->getMessage());
         }
     }
 
     /**
-     * Terima pesan dari topik.
+     * Handler CONNECT: Upsert SensorDevice by (dryer_id, address).
+     * Topic: iot/mitra{mitraId}/dryer{dryerId}/{panelId}/connect
      */
-    protected function handleMessage(string $topic, string $message): void
+    protected function handleConnectMessage(string $topic, string $payload): void
     {
+        Log::info('Connect message', ['topic' => $topic, 'payload' => $payload]);
+
+        try {
+            $data = json_decode($payload, true);
+            if (!is_array($data)) {
+                Log::error('Connect payload invalid JSON.');
+                return;
+            }
+
+            $mitraId = isset($data['mitra_id']) ? (int)$data['mitra_id'] : null;
+            $dryerId = isset($data['dryer_id']) ? (int)$data['dryer_id'] : null;
+            $panelId = isset($data['panel_id']) ? (int)$data['panel_id'] : null;
+
+            $parts = explode('/', $topic); // [iot, mitraX, dryerY, panel, connect]
+            if (count($parts) >= 5) {
+                if ($mitraId === null && preg_match('/^mitra(\d+)$/', $parts[1], $m)) $mitraId = (int)$m[1];
+                if ($dryerId === null && preg_match('/^dryer(\d+)$/', $parts[2], $m)) $dryerId = (int)$m[1];
+                if ($panelId === null && is_numeric($parts[3]))                                   $panelId = (int)$parts[3];
+            }
+
+            if (!$dryerId || !$panelId) {
+                Log::error('Missing dryer_id/panel_id in connect message.');
+                return;
+            }
+
+            $deviceName   = (string)($data['device_name'] ?? "Panel {$panelId}");
+            $location     = (string)($data['location'] ?? null);
+            $mqttBase     = (string)($data['mqtt_topic_base'] ?? "iot/mitra{$mitraId}/dryer{$dryerId}");
+            $telemetry    = (string)($data['telemetry_topic'] ?? "{$mqttBase}/{$panelId}");
+
+            // ---------- UPSERT by (dryer_id, address) ----------
+            $attributes = ['dryer_id' => $dryerId, 'address' => $telemetry];
+            $values     = ['status' => true];
+
+            if ($this->schemaHas('sensor_devices', 'device_name')) $values['device_name'] = $deviceName;
+            if ($this->schemaHas('sensor_devices', 'location'))    $values['location']    = $location;
+            if ($mitraId && $this->schemaHas('sensor_devices', 'mitra_id')) $values['mitra_id'] = $mitraId;
+
+            $device = null;
+
+            try {
+                // Gunakan updateOrCreate agar tidak pernah menyentuh device_id secara manual
+                $device = SensorDevice::updateOrCreate($attributes, $values);
+            } catch (\Throwable $e) {
+                // Jika terjadi unique violation (mis. sequence/ race), ambil ulang dan update manual
+                $msg = $e->getMessage();
+                if (strpos($msg, '23505') !== false || stripos($msg, 'unique') !== false) {
+                    Log::warning('Unique violation on SensorDevice upsert, retrying fetch & update...', ['error' => $msg, 'attrs' => $attributes]);
+                    $device = SensorDevice::where($attributes)->first();
+                    if ($device) {
+                        $device->update($values);
+                    } else {
+                        // fallback terakhir: coba create dalam transaction
+                        DB::beginTransaction();
+                        try {
+                            $device = SensorDevice::create(array_merge($attributes, $values));
+                            DB::commit();
+                        } catch (\Throwable $e2) {
+                            DB::rollBack();
+                            Log::error('Second attempt create SensorDevice failed: ' . $e2->getMessage());
+                            return;
+                        }
+                    }
+                } else {
+                    Log::error('Error upserting SensorDevice: ' . $msg);
+                    return;
+                }
+            }
+
+            Log::info('SensorDevice upserted', [
+                'device_id' => $device->device_id,
+                'dryer_id'  => $device->dryer_id,
+                'address'   => $device->address,
+            ]);
+
+            // Pastikan telemetry topic tersubscribe segera
+            if (empty($this->currentSubscriptions[$telemetry])) {
+                $meta = [
+                    'device_id' => (int)$device->device_id, // ini PK dari DB, bukan panel_id
+                    'address'   => $telemetry,
+                    'dryer_id'  => (int)$device->dryer_id,
+                ];
+                $this->subscribeTelemetryTopic($telemetry, $meta);
+            }
+        } catch (\Throwable $e) {
+            Log::error('Error in handleConnectMessage: ' . $e->getMessage());
+        }
+    }
+
+    protected function handleTelemetryMessage(string $topic, string $message): void
+    {
+        if (fnmatch('iot/*/*/*/connect', $topic)) return;
+
         Log::info('Received MQTT message', ['topic' => $topic, 'message' => $message]);
 
         try {
-            // Identifikasi device & dryer dari topik
             $meta = $this->topicMap[$topic] ?? null;
             if (!$meta) {
-                Log::warning('Message on unknown topic (not in subscription map)', ['topic' => $topic]);
+                Log::warning('Message on unknown telemetry topic', ['topic' => $topic]);
                 return;
             }
 
-            $deviceId = (int) $meta['device_id'];
+            $deviceId = (int) $meta['device_id']; // PK sensor_devices
             $dryerId  = (int) $meta['dryer_id'];
 
-            // Parse payload
             $data = json_decode($message, true);
             if (!is_array($data)) {
-                Log::error('Invalid JSON payload', ['topic' => $topic, 'message' => $message]);
+                Log::error('Invalid JSON telemetry', ['topic' => $topic]);
                 return;
             }
 
-            // (Opsional) fallback panel_id; tapi kita pakai topik sebagai sumber kebenaran
-            if (isset($data['panel_id']) && (int)$data['panel_id'] !== $deviceId) {
-                Log::warning('panel_id mismatch with topic mapping', [
-                    'topic_device_id' => $deviceId,
-                    'payload_panel_id' => (int)$data['panel_id'],
-                ]);
-            }
-
-            // Cari / buat proses untuk dryer ini
+            // Simpan raw event
             $dryingProcess = DryingProcess::where('dryer_id', $dryerId)
                 ->whereIn('status', ['pending', 'ongoing'])
                 ->first();
@@ -214,7 +379,6 @@ class MQTTService
                 ]);
             }
 
-            // Simpan ke DB (raw) per event supaya historis tetap ada
             $row = [
                 'process_id'      => $dryingProcess->process_id,
                 'device_id'       => $deviceId,
@@ -227,30 +391,24 @@ class MQTTService
             ];
             SensorData::create($row);
 
-            // Taruh juga ke buffer per-dryer (untuk penghitungan batch)
+            // Buffer batch per-dryer
             $this->buffers[$dryerId][$deviceId] = $row;
 
-            // Jika semua device aktif untuk dryer ini sudah mengirim batch dalam window, proses batch
             $expectedDevices = isset($this->devicesByDryer[$dryerId]) ? array_keys($this->devicesByDryer[$dryerId]) : [];
             $gotDevices      = isset($this->buffers[$dryerId]) ? array_keys($this->buffers[$dryerId]) : [];
 
             if (!empty($expectedDevices) && $this->hasAllDevices($expectedDevices, $gotDevices)) {
-                // Cek umur buffer: semua timestamp harus dalam window
                 if ($this->isBufferFresh($this->buffers[$dryerId])) {
                     $this->processAndSendData($dryingProcess, $dryerId);
                 } else {
-                    // buffer terlalu tua → reset
                     $this->buffers[$dryerId] = [];
                 }
             }
         } catch (\Throwable $e) {
-            Log::error('Error processing MQTT message: ' . $e->getMessage());
+            Log::error('Error processing telemetry: ' . $e->getMessage());
         }
     }
 
-    /**
-     * Pastikan semua device yang diharapkan sudah ada di buffer dryer.
-     */
     protected function hasAllDevices(array $expectedDeviceIds, array $gotDeviceIds): bool
     {
         sort($expectedDeviceIds);
@@ -258,11 +416,6 @@ class MQTTService
         return $expectedDeviceIds === $gotDeviceIds;
     }
 
-    /**
-     * Cek apakah seluruh data buffer dryer masih dalam window waktu yang diizinkan.
-     *
-     * @param array<int, array> $bufferForDryer [device_id => row]
-     */
     protected function isBufferFresh(array $bufferForDryer): bool
     {
         if (empty($bufferForDryer)) return false;
@@ -275,27 +428,19 @@ class MQTTService
         return ($now - $minTs) <= $this->bufferWindowSeconds;
     }
 
-    /**
-     * Proses satu batch untuk dryer tertentu, lalu kirim ke service prediksi.
-     */
     protected function processAndSendData(DryingProcess $dryingProcess, int $dryerId): void
     {
         try {
             $buffer = $this->buffers[$dryerId] ?? [];
-            if (empty($buffer)) {
-                return;
-            }
+            if (empty($buffer)) return;
 
-            // Pastikan proses punya field minimum agar prediksi valid.
             if (is_null($dryingProcess->grain_type_id)
                 || is_null($dryingProcess->berat_gabah_awal)
                 || is_null($dryingProcess->kadar_air_target)) {
-                // belum siap prediksi → hanya reset buffer dryer
                 $this->buffers[$dryerId] = [];
                 return;
             }
 
-            // Kumpulkan nilai rata2 dari buffer per device dalam batch ini
             $suhu_gabah_values = [];
             $kadar_air_values  = [];
             $suhu_ruang_values = [];
@@ -331,24 +476,16 @@ class MQTTService
             if (env('ML_API')) {
                 $response = Http::timeout(10)->post(rtrim(env('ML_API'), '/') . '/predict-now', $payload);
                 if (!$response->successful()) {
-                    Log::error('Failed to send data to prediction service', [
-                        'status' => $response->status(), 'body' => $response->body()
-                    ]);
+                    Log::error('Failed ML POST', ['status' => $response->status(), 'body' => $response->body()]);
                 }
             } else {
-                Log::warning('ML_API env is not set; skipping prediction POST.');
+                Log::warning('ML_API env not set; skip prediction POST.');
             }
 
-            // Reset buffer untuk dryer ini saja (dryer lain tidak terganggu)
             $this->buffers[$dryerId] = [];
-
-            Log::info('Batch processed & sent', [
-                'dryer_id'   => $dryerId,
-                'process_id' => $dryingProcess->process_id,
-            ]);
+            Log::info('Batch processed & sent', ['dryer_id' => $dryerId, 'process_id' => $dryingProcess->process_id]);
         } catch (\Throwable $e) {
-            Log::error('Error processing and sending data: ' . $e->getMessage());
-            // Jika error, jangan biarkan buffer membusuk: reset saja dryer ini
+            Log::error('Error processing batch: ' . $e->getMessage());
             $this->buffers[$dryerId] = [];
         }
     }
@@ -356,10 +493,22 @@ class MQTTService
     public function stop()
     {
         try {
-            $this->client->disconnect();
-            Log::info('MQTT client disconnected');
+            if ($this->client) {
+                $this->client->disconnect();
+                Log::info('MQTT client disconnected');
+            }
         } catch (MqttClientException $e) {
             Log::error('Failed to disconnect MQTT client: ' . $e->getMessage());
+        }
+    }
+
+    protected function schemaHas(string $table, string $column): bool
+    {
+        try {
+            return Schema::hasColumn($table, $column);
+        } catch (\Throwable $e) {
+            Log::warning("schemaHas failed for {$table}.{$column}: " . $e->getMessage());
+            return false;
         }
     }
 }

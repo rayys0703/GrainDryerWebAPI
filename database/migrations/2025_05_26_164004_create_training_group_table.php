@@ -7,8 +7,8 @@ use Illuminate\Support\Facades\Schema;
 return new class extends Migration {
     public function up(): void
     {
-        // 1) Buat tabel datasets_group
-        Schema::create('datasets_group', function (Blueprint $table) {
+        // 1) Buat tabel training_group
+        Schema::create('training_group', function (Blueprint $table) {
             $table->increments('group_id');
 
             $table->unsignedInteger('grain_type_id')->nullable();
@@ -27,6 +27,6 @@ return new class extends Migration {
 
     public function down(): void
     {
-        Schema::dropIfExists('datasets_group');
+        Schema::dropIfExists('training_group');
     }
 };

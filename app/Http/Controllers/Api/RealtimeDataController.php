@@ -227,7 +227,7 @@ class RealtimeDataController extends Controller
 
                 if ($response['current_moisture'] !== null) {
                     $cm = (float)$response['current_moisture'];
-                    $response['is_moisture_warning'] = ($cm < 14.0 || $cm > 25.0);
+                    $response['is_moisture_warning'] = ($cm < 14.0 || $cm > 29.0);
                 }
 
                 // Estimasi durasi

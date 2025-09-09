@@ -14,14 +14,14 @@ class TrainingDataController extends Controller
         set_time_limit(0);
 
         try {
-            $groups = DB::table('datasets_group')
+            $groups = DB::table('training_group')
                 ->orderBy('group_id')
                 ->cursor();
 
             $result = [];
 
             foreach ($groups as $group) {
-                $rows = DB::table('datasets')
+                $rows = DB::table('training_data')
                     ->where('group_id', $group->group_id)
                     ->orderBy('timestamp')
                     ->get();
@@ -34,7 +34,7 @@ class TrainingDataController extends Controller
                     $kadar_air_gabah  = $this->fmt7($r->kadar_air_gabah);
                     $suhu_ruangan     = $this->fmt7($r->suhu_ruangan);
                     $suhu_pembakaran  = $this->fmt7($r->suhu_pembakaran);
-                    $estimasi_durasi  = $this->fmt7($r->durasi_aktual); // <-- ambil dari datasets
+                    $estimasi_durasi  = $this->fmt7($r->durasi_aktual); // <-- ambil dari training_data
 
                     $intervals[] = [
                         'interval_id'     => $i++,
@@ -56,7 +56,7 @@ class TrainingDataController extends Controller
                     'process_id'          => $group->group_id,
                     'grain_type_id'       => $group->grain_type_id,
                     'berat_gabah'         => $group->massa_awal,
-                    'avg_estimasi_durasi' => null, // diminta tidak dipakai
+                    // 'avg_estimasi_durasi' => null, // diminta tidak dipakai
                     'intervals'           => $intervals,
                 ];
             }
@@ -64,7 +64,7 @@ class TrainingDataController extends Controller
             return response()->json($result);
 
         } catch (\Exception $e) {
-            Log::error('Error fetching training datasets: ' . $e->getMessage(), [
+            Log::error('Error fetching training training_data: ' . $e->getMessage(), [
                 'trace' => $e->getTraceAsString(),
             ]);
             return response()->json(['error' => 'Gagal mengambil data: ' . $e->getMessage()], 500);
