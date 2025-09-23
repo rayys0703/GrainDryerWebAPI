@@ -29,6 +29,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Bed Dryers
     Route::get('/bed-dryers', [AuthController::class, 'myBedDryers']);
 
+    // Drying Process
     Route::get('/drying-history', [DryingProcessController::class, 'getHistory']);
     Route::get('/drying-process/{processId}', [DryingProcessController::class, 'getProcessDetails']);
     Route::post('/drying-process/validate', [DryingProcessController::class, 'validateProcess']);
@@ -37,14 +38,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/sensor-devices/{device}/reset-delete', [SensorDevicesController::class, 'resetAndDelete']);
 });
 
+Route::get('/realtime-data', [RealtimeDataController::class, 'index']);  // realtime
+Route::get('/dashboard-data', [RealtimeDataController::class, 'dashboardData']);  // realtime
+
 Route::post('/sensor-devices/new', [SensorDevicesController::class, 'newSensor']);
-
 Route::get('/grain-types', [GrainTypeController::class, 'index']);
-
 Route::get('/dataset', [TrainingDataController::class, 'index']);
-
-Route::get('/realtime-data', [RealtimeDataController::class, 'index']);
-Route::get('/dashboard-data', [RealtimeDataController::class, 'dashboardData']);
 
 Route::post('/prediction/start', [PredictionController::class, 'startPrediction']);
 Route::post('/prediction/stop', [PredictionController::class, 'stopPrediction']);

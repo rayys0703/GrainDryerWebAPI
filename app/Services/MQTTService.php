@@ -12,6 +12,8 @@ use Illuminate\Support\Facades\Schema;
 use PhpMqtt\Client\MqttClient;
 use PhpMqtt\Client\Exceptions\MqttClientException;
 use PhpMqtt\Client\ConnectionSettings;
+use App\Events\DashboardUpdated;
+use App\Http\Controllers\Api\RealtimeDataController;
 
 class MQTTService
 {
@@ -390,6 +392,14 @@ class MQTTService
                 'status_pengaduk' => array_key_exists('stirrer_status', $data) ? (bool) $data['stirrer_status'] : null,
             ];
             SensorData::create($row);
+
+            // Trigger broadcast
+            if ($dryingProcess && in_array($dryingProcess->status, ['pending', 'ongoing'])) {
+                $controller = new RealtimeDataController();
+                $request = new \Illuminate\Http\Request(['dryer_id' => $dryerId]);
+                $dashboardData = $controller->dashboardData($request)->getData(true);
+                event(new DashboardUpdated($dryerId, $dashboardData));
+            }
 
             // Buffer batch per-dryer
             $this->buffers[$dryerId][$deviceId] = $row;
