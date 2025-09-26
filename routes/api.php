@@ -10,6 +10,9 @@ use App\Http\Controllers\Api\DryingProcessController;
 use App\Http\Controllers\Api\SensorDevicesController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\Broadcast;
+
+Broadcast::routes(['middleware' => ['auth:sanctum']]);
 
 Route::post('/login', [AuthController::class, 'login']);
 

@@ -13,6 +13,7 @@ use PhpMqtt\Client\MqttClient;
 use PhpMqtt\Client\Exceptions\MqttClientException;
 use PhpMqtt\Client\ConnectionSettings;
 use App\Events\DashboardUpdated;
+use App\Events\RealtimeDataUpdated;
 use App\Http\Controllers\Api\RealtimeDataController;
 
 class MQTTService
@@ -393,12 +394,37 @@ class MQTTService
             ];
             SensorData::create($row);
 
-            // Trigger broadcast
+            // ====== broadcast Realtime ======
+            $controller = app(RealtimeDataController::class);
+            $response = $controller->index(new \Illuminate\Http\Request([
+                'dryer_id' => $dryerId,
+            ]));
+            $payload = $response->getData(true);
+
+            if (!empty($payload['now_sensors']['data']) ||
+                !empty($payload['initial_sensors']['data']) ||
+                !empty($payload['drying_process'])) {
+
+                event(new RealtimeDataUpdated($dryerId, $payload));
+            } else {
+                \Log::info("Skip RealtimeDataUpdated broadcast dryer {$dryerId}, payload kosong");
+            }
+
+            // Trigger broadcast Dashboard
             if ($dryingProcess && in_array($dryingProcess->status, ['pending', 'ongoing'])) {
                 $controller = new RealtimeDataController();
                 $request = new \Illuminate\Http\Request(['dryer_id' => $dryerId]);
                 $dashboardData = $controller->dashboardData($request)->getData(true);
-                event(new DashboardUpdated($dryerId, $dashboardData));
+
+                if (!empty($dashboardData['moisture_data']) ||
+                    !empty($dashboardData['grain_temperature_data']) ||
+                    !empty($dashboardData['room_temperature_data']) ||
+                    !empty($dashboardData['burning_temperature_data'])) {
+                    
+                    event(new DashboardUpdated($dryerId, $dashboardData));
+                } else {
+                    \Log::info("Skip broadcast dryer {$dryerId}, data kosong");
+                }
             }
 
             // Buffer batch per-dryer
