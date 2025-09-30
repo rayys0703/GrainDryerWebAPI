@@ -382,10 +382,23 @@ class MQTTService
                 ]);
             }
 
+            // Tentukan timestamp referensi: gunakan timestamp sekarang jika ini perangkat pertama dalam batch
+            if (!isset($this->buffers[$dryerId])) {
+                $this->buffers[$dryerId] = [];
+            }
+            $referenceTimestamp = isset($this->buffers[$dryerId]['reference_timestamp'])
+                ? $this->buffers[$dryerId]['reference_timestamp']
+                : now()->format('Y-m-d H:i:s');
+
+            // Simpan timestamp referensi untuk batch ini jika belum ada
+            if (!isset($this->buffers[$dryerId]['reference_timestamp'])) {
+                $this->buffers[$dryerId]['reference_timestamp'] = $referenceTimestamp;
+            }
+
             $row = [
                 'process_id'      => $dryingProcess->process_id,
                 'device_id'       => $deviceId,
-                'timestamp'       => now(),
+                'timestamp'       => $referenceTimestamp, // Gunakan timestamp referensi
                 'kadar_air_gabah' => isset($data['grain_moisture'])     ? (float) $data['grain_moisture']     : null,
                 'suhu_gabah'      => isset($data['grain_temperature'])  ? (float) $data['grain_temperature']  : null,
                 'suhu_ruangan'    => isset($data['room_temperature'])   ? (float) $data['room_temperature']   : null,
@@ -431,7 +444,7 @@ class MQTTService
             $this->buffers[$dryerId][$deviceId] = $row;
 
             $expectedDevices = isset($this->devicesByDryer[$dryerId]) ? array_keys($this->devicesByDryer[$dryerId]) : [];
-            $gotDevices      = isset($this->buffers[$dryerId]) ? array_keys($this->buffers[$dryerId]) : [];
+            $gotDevices      = isset($this->buffers[$dryerId]) ? array_keys(array_diff_key($this->buffers[$dryerId], ['reference_timestamp' => null])) : [];
 
             if (!empty($expectedDevices) && $this->hasAllDevices($expectedDevices, $gotDevices)) {
                 if ($this->isBufferFresh($this->buffers[$dryerId])) {
@@ -483,7 +496,8 @@ class MQTTService
             $suhu_bakar_values = [];
             $stirrer_values    = [];
 
-            foreach ($buffer as $row) {
+            foreach ($buffer as $deviceId => $row) {
+                if ($deviceId === 'reference_timestamp') continue; // Lewati kunci reference_timestamp
                 if (!is_null($row['suhu_gabah']))      $suhu_gabah_values[] = (float) $row['suhu_gabah'];
                 if (!is_null($row['kadar_air_gabah'])) $kadar_air_values[]  = (float) $row['kadar_air_gabah'];
                 if (!is_null($row['suhu_ruangan']))    $suhu_ruang_values[] = (float) $row['suhu_ruangan'];
